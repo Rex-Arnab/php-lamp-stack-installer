@@ -145,6 +145,43 @@ echo -e "\n${YELLOW}  show_service_status (graceful handling)${NC}"
 RESULT=$(show_service_status 2>&1 </dev/null || true)
 assert "show_service_status doesn't crash without systemd" true
 
+# -- Test generate_password --
+echo -e "\n${YELLOW}  generate_password${NC}"
+GEN_PASS=$(generate_password)
+assert "generate_password produces output" test -n "$GEN_PASS"
+GEN_LEN=${#GEN_PASS}
+assert "generate_password is 20 chars" test "$GEN_LEN" -eq 20
+GEN_PASS2=$(generate_password)
+assert "generate_password is random (two calls differ)" test "$GEN_PASS" != "$GEN_PASS2"
+
+# -- Test save_credential / show_db_credentials --
+echo -e "\n${YELLOW}  save_credential / show_db_credentials${NC}"
+rm -f "$STACK_CREDS"
+save_credential "MySQL" "root" "testpass123"
+assert_file "Creds file created" "$STACK_CREDS"
+CREDS_PERMS=$(stat -c '%a' "$STACK_CREDS" 2>/dev/null || stat -f '%Lp' "$STACK_CREDS" 2>/dev/null)
+assert "Creds file has 600 permissions" test "$CREDS_PERMS" = "600"
+assert_contains "Creds has MySQL entry" "$STACK_CREDS" "MySQL|root|testpass123"
+
+# Add a second credential
+save_credential "PostgreSQL" "postgres" "pgpass456"
+assert_contains "Creds has PostgreSQL entry" "$STACK_CREDS" "PostgreSQL|postgres|pgpass456"
+
+# Update existing credential (should replace, not duplicate)
+save_credential "MySQL" "root" "newpass789"
+MYSQL_COUNT=$(grep -c "^MySQL|" "$STACK_CREDS")
+assert "save_credential replaces (no duplicate)" test "$MYSQL_COUNT" -eq 1
+assert_contains "Creds has updated MySQL password" "$STACK_CREDS" "MySQL|root|newpass789"
+
+# show_db_credentials should not crash
+RESULT=$(show_db_credentials 2>&1 </dev/null || true)
+assert "show_db_credentials doesn't crash" true
+
+# show_db_credentials with empty file
+rm -f "$STACK_CREDS"
+RESULT=$(show_db_credentials 2>&1 </dev/null || true)
+assert "show_db_credentials handles missing file" true
+
 # ── Test 2: --panel flag parsing ─────────────────────────────────────────────
 echo -e "\n${CYAN}[Phase 2] --panel Flag Routing${NC}"
 
@@ -161,6 +198,7 @@ assert_contains "Panel has phpinfo option" /opt/setup-stack.sh '"phpinfo"'
 assert_contains "Panel has files option" /opt/setup-stack.sh '"files"'
 assert_contains "Panel has phpmyadmin option" /opt/setup-stack.sh '"phpmyadmin"'
 assert_contains "Panel has adminer option" /opt/setup-stack.sh '"adminer"'
+assert_contains "Panel has db-creds option" /opt/setup-stack.sh '"db-creds"'
 assert_contains "Panel has status option" /opt/setup-stack.sh '"status"'
 assert_contains "Panel has restart option" /opt/setup-stack.sh '"restart"'
 assert_contains "Panel has logs option" /opt/setup-stack.sh '"logs"'

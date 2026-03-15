@@ -415,10 +415,17 @@ install_mysql() {
     systemctl enable mysql
     systemctl start mysql
 
+    # Set root password
+    local root_pass
+    root_pass=$(generate_password)
+    mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '${root_pass}'; FLUSH PRIVILEGES;" 2>/dev/null \
+        && save_credential "MySQL" "root" "$root_pass" \
+        || log_warn "Could not set MySQL root password — using default auth."
+
     log_success "MySQL installed."
 
     "$DIALOG_BIN" --title "MySQL Security" \
-        --yesno "Run mysql_secure_installation now?\n(Recommended for production servers)" 8 55 2>/dev/null \
+        --yesno "Run mysql_secure_installation now?\n(Recommended for production servers)\n\nNote: root password was auto-set. You can change it during this step." 10 55 2>/dev/null \
         && mysql_secure_installation || log_warn "Skipped mysql_secure_installation."
 }
 
@@ -429,10 +436,17 @@ install_mariadb() {
     systemctl enable mariadb
     systemctl start mariadb
 
+    # Set root password
+    local root_pass
+    root_pass=$(generate_password)
+    mariadb -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '${root_pass}'; FLUSH PRIVILEGES;" 2>/dev/null \
+        && save_credential "MariaDB" "root" "$root_pass" \
+        || log_warn "Could not set MariaDB root password — using default auth."
+
     log_success "MariaDB installed."
 
     "$DIALOG_BIN" --title "MariaDB Security" \
-        --yesno "Run mariadb-secure-installation now?\n(Recommended for production servers)" 8 55 2>/dev/null \
+        --yesno "Run mariadb-secure-installation now?\n(Recommended for production servers)\n\nNote: root password was auto-set. You can change it during this step." 10 55 2>/dev/null \
         && mariadb-secure-installation || log_warn "Skipped mariadb-secure-installation."
 }
 
@@ -442,6 +456,13 @@ install_postgresql() {
 
     systemctl enable postgresql
     systemctl start postgresql
+
+    # Set postgres user password
+    local pg_pass
+    pg_pass=$(generate_password)
+    su - postgres -c "psql -c \"ALTER USER postgres PASSWORD '${pg_pass}';\"" 2>/dev/null \
+        && save_credential "PostgreSQL" "postgres" "$pg_pass" \
+        || log_warn "Could not set PostgreSQL password — using default peer auth."
 
     log_success "PostgreSQL installed."
 }
@@ -469,6 +490,20 @@ install_mongodb() {
     systemctl daemon-reload
     systemctl enable mongod
     systemctl start mongod
+
+    # Create admin user with password
+    local mongo_pass
+    mongo_pass=$(generate_password)
+    mongosh --quiet --eval "
+        use admin;
+        db.createUser({
+            user: 'admin',
+            pwd: '${mongo_pass}',
+            roles: ['root']
+        });
+    " 2>/dev/null \
+        && save_credential "MongoDB" "admin" "$mongo_pass" \
+        || log_warn "Could not create MongoDB admin user — using default (no auth)."
 
     log_success "MongoDB 7.0 installed."
 }
@@ -570,6 +605,77 @@ restart_services() {
 # ── Section 4: Control Panel ─────────────────────────────────────────────────
 
 STACK_CONFIG="/etc/stack-panel.conf"
+STACK_CREDS="/etc/stack-panel.creds"
+
+generate_password() {
+    tr -dc 'A-Za-z0-9!@#$%&*' < /dev/urandom | head -c 20 || true
+}
+
+save_credential() {
+    local service="$1" user="$2" password="$3"
+    # Create creds file with strict permissions if it doesn't exist
+    if [ ! -f "$STACK_CREDS" ]; then
+        touch "$STACK_CREDS"
+        chmod 600 "$STACK_CREDS"
+    fi
+    # Remove old entry for this service, then append new one
+    sed -i "/^${service}|/d" "$STACK_CREDS"
+    echo "${service}|${user}|${password}" >> "$STACK_CREDS"
+}
+
+show_db_credentials() {
+    if [ ! -f "$STACK_CREDS" ] || [ ! -s "$STACK_CREDS" ]; then
+        "$DIALOG_BIN" --title "DB Credentials" \
+            --msgbox "No credentials stored.\n\nThis can happen if:\n- Databases were installed before this feature\n- No databases were installed\n\nCheck manually:\n  MySQL/MariaDB: sudo mysql\n  PostgreSQL: sudo -u postgres psql" 14 55 2>/dev/null
+        return
+    fi
+
+    local cred_text="Stored Database Credentials\n"
+    cred_text="${cred_text}$(printf '=%.0s' {1..40})\n\n"
+
+    while IFS='|' read -r service user password; do
+        [ -z "$service" ] && continue
+
+        # Verify if the stored password still works
+        local status="?"
+        case "$service" in
+            MySQL)
+                mysql -u"$user" -p"$password" -e "SELECT 1;" >/dev/null 2>&1 \
+                    && status="VALID" || status="CHANGED"
+                ;;
+            MariaDB)
+                mariadb -u"$user" -p"$password" -e "SELECT 1;" >/dev/null 2>&1 \
+                    && status="VALID" || status="CHANGED"
+                ;;
+            PostgreSQL)
+                PGPASSWORD="$password" psql -U "$user" -d postgres -c "SELECT 1;" >/dev/null 2>&1 \
+                    && status="VALID" || status="CHANGED"
+                ;;
+            MongoDB)
+                mongosh --quiet -u "$user" -p "$password" --authenticationDatabase admin --eval "db.runCommand({ping:1})" >/dev/null 2>&1 \
+                    && status="VALID" || status="CHANGED"
+                ;;
+        esac
+
+        cred_text="${cred_text}  Service:  ${service}\n"
+        cred_text="${cred_text}  User:     ${user}\n"
+        cred_text="${cred_text}  Password: ${password}\n"
+        if [ "$status" = "VALID" ]; then
+            cred_text="${cred_text}  Status:   [VALID]\n\n"
+        else
+            cred_text="${cred_text}  Status:   [CHANGED externally]\n\n"
+        fi
+    done < "$STACK_CREDS"
+
+    cred_text="${cred_text}$(printf '-%.0s' {1..40})\n"
+    cred_text="${cred_text}If status shows CHANGED, the password\n"
+    cred_text="${cred_text}was modified outside this tool\n"
+    cred_text="${cred_text}(via phpMyAdmin, CLI, etc).\n\n"
+    cred_text="${cred_text}File: ${STACK_CREDS} (root-only, 600)"
+
+    "$DIALOG_BIN" --title "DB Credentials" \
+        --msgbox "$cred_text" 26 55 2>/dev/null
+}
 
 save_stack_config() {
     cat > "$STACK_CONFIG" <<EOF
@@ -876,12 +982,13 @@ control_panel() {
     while true; do
         local choice
         choice=$(run_dialog --title "Stack Control Panel" \
-            --menu "Select an action:" 20 60 9 \
+            --menu "Select an action:" 22 60 10 \
             "open-site"   "Open Site in Browser" \
             "phpinfo"     "PHP Info Page" \
             "files"       "File Explorer" \
             "phpmyadmin"  "phpMyAdmin" \
             "adminer"     "Adminer (DB Manager)" \
+            "db-creds"    "Show DB Credentials" \
             "status"      "Service Status" \
             "restart"     "Restart All Services" \
             "logs"        "View Logs" \
@@ -912,6 +1019,9 @@ control_panel() {
                     install_adminer
                 fi
                 open_in_browser "http://localhost:${port}/adminer.php"
+                ;;
+            db-creds)
+                show_db_credentials
                 ;;
             status)
                 show_service_status

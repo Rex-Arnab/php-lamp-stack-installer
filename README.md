@@ -21,6 +21,7 @@ Interactive LAMP/LEMP stack setup script with a post-installation control panel.
 | File Explorer | Deploys a secure single-file PHP file browser (read-only, no traversal) |
 | phpMyAdmin | Installs if missing, then opens in browser |
 | Adminer | Downloads single-file DB manager to docroot |
+| DB Credentials | Shows stored database usernames/passwords with live validation |
 | Service Status | Shows running/stopped state of all installed services |
 | Restart Services | Restarts web server, PHP-FPM, and all databases |
 | View Logs | Pick a service log and view the last 50 lines |
@@ -70,6 +71,7 @@ Navigate with arrow keys and ENTER. The menu loops until you choose **Exit**.
 - **File Explorer** — deploys a single-file PHP browser at `explorer.php`. Browse files in your document root with sizes and dates. Read-only, no traversal outside docroot.
 - **phpMyAdmin** — if not installed, prompts to install it (`apt-get install phpmyadmin`). For Nginx, auto-symlinks into your docroot. Then opens in browser.
 - **Adminer** — downloads the single-file `adminer.php` database manager into your docroot. Supports MySQL, MariaDB, PostgreSQL, MongoDB — all in one file.
+- **Show DB Credentials** — displays stored database usernames and passwords. Each credential is live-validated against the actual database — if someone changed the password via phpMyAdmin, CLI, or any other tool, it shows `[CHANGED externally]` instead of `[VALID]`. Credentials are stored in `/etc/stack-panel.creds` (root-only, `chmod 600`).
 - **Service Status** — shows whether each installed service (web server, PHP-FPM, databases) is running, stopped, or failed.
 - **Restart All Services** — restarts every installed service and reports success/failure for each.
 - **View Logs** — sub-menu to pick a service log (Apache/Nginx error/access, PHP-FPM, MySQL, PostgreSQL, MongoDB). Displays the last 50 lines.
@@ -173,6 +175,21 @@ docker run --rm stack-test
   show_service_status (graceful handling)
   PASS  show_service_status doesn't crash without systemd
 
+  generate_password
+  PASS  generate_password produces output
+  PASS  generate_password is 20 chars
+  PASS  generate_password is random (two calls differ)
+
+  save_credential / show_db_credentials
+  PASS  Creds file created
+  PASS  Creds file has 600 permissions
+  PASS  Creds has MySQL entry
+  PASS  Creds has PostgreSQL entry
+  PASS  save_credential replaces (no duplicate)
+  PASS  Creds has updated MySQL password
+  PASS  show_db_credentials doesn't crash
+  PASS  show_db_credentials handles missing file
+
 [Phase 2] --panel Flag Routing
   PASS  main() checks --panel flag
   PASS  main() calls load_stack_config for --panel
@@ -184,6 +201,7 @@ docker run --rm stack-test
   PASS  Panel has files option
   PASS  Panel has phpmyadmin option
   PASS  Panel has adminer option
+  PASS  Panel has db-creds option
   PASS  Panel has status option
   PASS  Panel has restart option
   PASS  Panel has logs option
@@ -224,9 +242,9 @@ docker run --rm stack-test
 ========================================
   Test Results
 ========================================
-  Passed: 53
+  Passed: 65
   Failed: 0
-  Total:  53
+  Total:  65
 
   ALL TESTS PASSED
 ```
@@ -236,9 +254,9 @@ docker run --rm stack-test
 | Phase | Area | Tests |
 |-------|------|-------|
 | 0 | Bash syntax (`bash -n`) | 1 |
-| 1 | Config save/load, phpinfo, file explorer, browser open, service status | 20 |
+| 1 | Config save/load, phpinfo, file explorer, browser open, service status, password generation, credential storage/display | 31 |
 | 2 | `--panel` flag routing in `main()` | 3 |
-| 3 | All 9 control panel menu items present | 9 |
+| 3 | All 10 control panel menu items present | 10 |
 | 4 | Adminer download + config update | 2 |
 | 5 | Log file paths for all services | 7 |
 | 6 | explorer.php security (no dangerous functions, traversal guard) | 3 |
@@ -260,3 +278,4 @@ stack-installer/
 - `explorer.php` is read-only — no upload, delete, or edit. Paths are validated with `realpath()` to prevent directory traversal.
 - `info.php` and `explorer.php` display a warning banner: remove them in production.
 - phpMyAdmin and Adminer are development tools — restrict access or remove before going live.
+- DB credentials are stored in `/etc/stack-panel.creds` with `chmod 600` (root-only). Passwords are auto-generated (20 chars, alphanumeric + symbols) during installation. The panel live-validates stored passwords against the actual database — if a password was changed externally (via phpMyAdmin, CLI, etc.), it shows `[CHANGED externally]` so you know the stored value is stale.
