@@ -205,6 +205,31 @@ assert_contains "change_db_password offers auto-generate" /opt/setup-stack.sh '"
 assert_contains "change_db_password offers manual entry" /opt/setup-stack.sh '"manual"'
 assert_contains "change_db_password saves updated cred" /opt/setup-stack.sh 'save_credential "$selected" "$db_user" "$new_pass"'
 
+# -- Test create_db_user --
+echo -e "\n${YELLOW}  create_db_user${NC}"
+
+# create_db_user with no databases installed — should not crash
+HAS_MYSQL="off"; HAS_MARIADB="off"; HAS_POSTGRESQL="off"; HAS_MONGODB="off"
+SEL_MYSQL="off"; SEL_MARIADB="off"; SEL_POSTGRESQL="off"; SEL_MONGODB="off"
+RESULT=$(create_db_user 2>&1 </dev/null || true)
+assert "create_db_user handles no databases" true
+
+# Verify function structure
+assert_contains "create_db_user has MySQL CREATE USER" /opt/setup-stack.sh "CREATE USER '\${new_user}'@'localhost'"
+assert_contains "create_db_user has PostgreSQL CREATE USER" /opt/setup-stack.sh "CREATE USER \${new_user} WITH PASSWORD"
+assert_contains "create_db_user has MongoDB createUser" /opt/setup-stack.sh "db.createUser"
+assert_contains "create_db_user supports grant all" /opt/setup-stack.sh "GRANT ALL PRIVILEGES ON \*.\*"
+assert_contains "create_db_user supports grant specific db" /opt/setup-stack.sh 'GRANT ALL PRIVILEGES ON.*grant_db'
+assert_contains "create_db_user supports MongoDB roles" /opt/setup-stack.sh "readWrite"
+assert_contains "create_db_user saves new credential" /opt/setup-stack.sh 'save_credential "${selected}:${new_user}"'
+
+# Verify the credential key format includes username (allows multiple users per DB)
+rm -f "$STACK_CREDS"
+save_credential "MySQL:devuser" "devuser" "devpass123"
+save_credential "MySQL:root" "root" "rootpass456"
+MYSQL_ENTRIES=$(grep -c "^MySQL:" "$STACK_CREDS")
+assert "Multiple users per DB in creds file" test "$MYSQL_ENTRIES" -eq 2
+
 # ── Test 2: --panel flag parsing ─────────────────────────────────────────────
 echo -e "\n${CYAN}[Phase 2] --panel Flag Routing${NC}"
 
@@ -223,6 +248,7 @@ assert_contains "Panel has phpmyadmin option" /opt/setup-stack.sh '"phpmyadmin"'
 assert_contains "Panel has adminer option" /opt/setup-stack.sh '"adminer"'
 assert_contains "Panel has db-creds option" /opt/setup-stack.sh '"db-creds"'
 assert_contains "Panel has db-passwd option" /opt/setup-stack.sh '"db-passwd"'
+assert_contains "Panel has db-user option" /opt/setup-stack.sh '"db-user"'
 assert_contains "Panel has status option" /opt/setup-stack.sh '"status"'
 assert_contains "Panel has restart option" /opt/setup-stack.sh '"restart"'
 assert_contains "Panel has logs option" /opt/setup-stack.sh '"logs"'

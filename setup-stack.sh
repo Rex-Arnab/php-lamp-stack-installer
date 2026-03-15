@@ -1081,6 +1081,199 @@ change_db_password() {
     fi
 }
 
+create_db_user() {
+    # Build menu of installed databases
+    local items=""
+    local tag_count=0
+    if [ "${HAS_MYSQL:-${SEL_MYSQL:-off}}" = "on" ]; then
+        items="$items MySQL 'MySQL Server' off"
+        tag_count=$((tag_count + 1))
+    fi
+    if [ "${HAS_MARIADB:-${SEL_MARIADB:-off}}" = "on" ]; then
+        items="$items MariaDB 'MariaDB Server' off"
+        tag_count=$((tag_count + 1))
+    fi
+    if [ "${HAS_POSTGRESQL:-${SEL_POSTGRESQL:-off}}" = "on" ]; then
+        items="$items PostgreSQL 'PostgreSQL Server' off"
+        tag_count=$((tag_count + 1))
+    fi
+    if [ "${HAS_MONGODB:-${SEL_MONGODB:-off}}" = "on" ]; then
+        items="$items MongoDB 'MongoDB Server' off"
+        tag_count=$((tag_count + 1))
+    fi
+
+    if [ "$tag_count" -eq 0 ]; then
+        "$DIALOG_BIN" --title "Create DB User" \
+            --msgbox "No databases installed." 7 40 2>/dev/null
+        return
+    fi
+
+    local height=$((tag_count + 8))
+    local selected
+    selected=$(eval run_dialog --title \"Create DB User\" \
+        --radiolist \"'Select database:'\" "$height" 55 "$tag_count" \
+        "$items") || return 0
+
+    [ -z "$selected" ] && return 0
+
+    # Get username
+    local new_user
+    new_user=$(run_dialog --title "Create User — ${selected}" \
+        --inputbox "Enter username:" 8 55 "") || return 0
+    if [ -z "$new_user" ]; then
+        "$DIALOG_BIN" --title "Error" --msgbox "Username cannot be empty." 7 40 2>/dev/null
+        return
+    fi
+
+    # Get password
+    local new_pass=""
+    local method
+    method=$(run_dialog --title "Password for ${new_user}" \
+        --menu "How would you like to set the password?" 12 55 2 \
+        "auto"   "Auto-generate secure password" \
+        "manual" "Enter password manually") || return 0
+
+    if [ "$method" = "auto" ]; then
+        new_pass=$(generate_password)
+    else
+        new_pass=$(run_dialog --title "Password for ${new_user}" \
+            --inputbox "Enter password:" 8 55 "") || return 0
+        if [ -z "$new_pass" ]; then
+            "$DIALOG_BIN" --title "Error" --msgbox "Password cannot be empty." 7 40 2>/dev/null
+            return
+        fi
+    fi
+
+    # For MySQL/MariaDB/PostgreSQL: optionally grant access to a specific database
+    local grant_db=""
+    if [ "$selected" != "MongoDB" ]; then
+        local db_choice
+        db_choice=$(run_dialog --title "Grant Privileges" \
+            --menu "Grant this user access to:" 12 55 3 \
+            "all"      "All databases (full privileges)" \
+            "specific" "A specific database" \
+            "none"     "No grants (create user only)") || return 0
+
+        if [ "$db_choice" = "specific" ]; then
+            grant_db=$(run_dialog --title "Database Name" \
+                --inputbox "Enter database name to grant access to:" 8 55 "") || return 0
+            if [ -z "$grant_db" ]; then
+                "$DIALOG_BIN" --title "Error" --msgbox "Database name cannot be empty." 7 45 2>/dev/null
+                return
+            fi
+        elif [ "$db_choice" = "all" ]; then
+            grant_db="*"
+        fi
+    fi
+
+    # For MongoDB: pick auth database and role
+    local mongo_db="admin"
+    local mongo_role="readWrite"
+    if [ "$selected" = "MongoDB" ]; then
+        mongo_db=$(run_dialog --title "MongoDB Database" \
+            --inputbox "Auth/target database:" 8 55 "admin") || return 0
+        [ -z "$mongo_db" ] && mongo_db="admin"
+
+        mongo_role=$(run_dialog --title "MongoDB Role" \
+            --menu "Select role for ${new_user}:" 14 55 5 \
+            "readWrite"     "Read and write to the database" \
+            "read"          "Read-only access" \
+            "dbAdmin"       "Database administration" \
+            "userAdmin"     "User administration" \
+            "root"          "Superuser (all privileges)") || return 0
+    fi
+
+    # Execute user creation
+    local success=false
+    local error_msg=""
+    case "$selected" in
+        MySQL)
+            local sql="CREATE USER '${new_user}'@'localhost' IDENTIFIED BY '${new_pass}';"
+            if [ "$grant_db" = "*" ]; then
+                sql="$sql GRANT ALL PRIVILEGES ON *.* TO '${new_user}'@'localhost' WITH GRANT OPTION;"
+            elif [ -n "$grant_db" ]; then
+                sql="$sql GRANT ALL PRIVILEGES ON \`${grant_db}\`.* TO '${new_user}'@'localhost';"
+            fi
+            sql="$sql FLUSH PRIVILEGES;"
+            if mysql -e "$sql" 2>/tmp/stack_pw_err; then
+                success=true
+            else
+                error_msg=$(cat /tmp/stack_pw_err)
+            fi
+            ;;
+        MariaDB)
+            local sql="CREATE USER '${new_user}'@'localhost' IDENTIFIED BY '${new_pass}';"
+            if [ "$grant_db" = "*" ]; then
+                sql="$sql GRANT ALL PRIVILEGES ON *.* TO '${new_user}'@'localhost' WITH GRANT OPTION;"
+            elif [ -n "$grant_db" ]; then
+                sql="$sql GRANT ALL PRIVILEGES ON \`${grant_db}\`.* TO '${new_user}'@'localhost';"
+            fi
+            sql="$sql FLUSH PRIVILEGES;"
+            if mariadb -e "$sql" 2>/tmp/stack_pw_err; then
+                success=true
+            else
+                error_msg=$(cat /tmp/stack_pw_err)
+            fi
+            ;;
+        PostgreSQL)
+            local sql="CREATE USER ${new_user} WITH PASSWORD '${new_pass}';"
+            if [ "$grant_db" = "*" ]; then
+                sql="$sql ALTER USER ${new_user} WITH SUPERUSER;"
+            elif [ -n "$grant_db" ]; then
+                sql="$sql GRANT ALL PRIVILEGES ON DATABASE ${grant_db} TO ${new_user};"
+            fi
+            if su - postgres -c "psql -c \"$sql\"" 2>/tmp/stack_pw_err; then
+                success=true
+            else
+                error_msg=$(cat /tmp/stack_pw_err)
+            fi
+            ;;
+        MongoDB)
+            if mongosh --quiet --eval "
+                use ${mongo_db};
+                db.createUser({
+                    user: '${new_user}',
+                    pwd: '${new_pass}',
+                    roles: [{role: '${mongo_role}', db: '${mongo_db}'}]
+                });
+            " 2>/tmp/stack_pw_err; then
+                success=true
+            else
+                error_msg=$(cat /tmp/stack_pw_err)
+            fi
+            ;;
+        *)
+            error_msg="Unknown database service: $selected"
+            ;;
+    esac
+    rm -f /tmp/stack_pw_err
+
+    if [ "$success" = true ]; then
+        save_credential "${selected}:${new_user}" "$new_user" "$new_pass"
+
+        local detail="User:     ${new_user}\n  Password: ${new_pass}"
+        case "$selected" in
+            MongoDB)
+                detail="${detail}\n  Database: ${mongo_db}\n  Role:     ${mongo_role}" ;;
+            *)
+                if [ "$grant_db" = "*" ]; then
+                    detail="${detail}\n  Grants:   ALL PRIVILEGES (superuser)"
+                elif [ -n "$grant_db" ]; then
+                    detail="${detail}\n  Grants:   ALL on ${grant_db}"
+                else
+                    detail="${detail}\n  Grants:   None (login only)"
+                fi
+                ;;
+        esac
+
+        "$DIALOG_BIN" --title "User Created" \
+            --msgbox "${selected} user created successfully.\n\n  ${detail}\n\nSaved to credentials store." 16 58 2>/dev/null
+    else
+        "$DIALOG_BIN" --title "Error" \
+            --msgbox "Failed to create ${selected} user.\n\n${error_msg}" 12 60 2>/dev/null
+    fi
+}
+
 control_panel() {
     local docroot="${DOCROOT:-$SEL_DOCROOT}"
     local port="${PORT:-$SEL_PORT}"
@@ -1088,7 +1281,7 @@ control_panel() {
     while true; do
         local choice
         choice=$(run_dialog --title "Stack Control Panel" \
-            --menu "Select an action:" 24 60 11 \
+            --menu "Select an action:" 25 60 12 \
             "open-site"   "Open Site in Browser" \
             "phpinfo"     "PHP Info Page" \
             "files"       "File Explorer" \
@@ -1096,6 +1289,7 @@ control_panel() {
             "adminer"     "Adminer (DB Manager)" \
             "db-creds"    "Show DB Credentials" \
             "db-passwd"   "Change DB Password" \
+            "db-user"     "Create DB User" \
             "status"      "Service Status" \
             "restart"     "Restart All Services" \
             "logs"        "View Logs" \
@@ -1132,6 +1326,9 @@ control_panel() {
                 ;;
             db-passwd)
                 change_db_password
+                ;;
+            db-user)
+                create_db_user
                 ;;
             status)
                 show_service_status

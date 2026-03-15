@@ -23,6 +23,7 @@ Interactive LAMP/LEMP stack setup script with a post-installation control panel.
 | Adminer | Downloads single-file DB manager to docroot |
 | DB Credentials | Shows stored database usernames/passwords with live validation |
 | Change DB Password | Reset a database password (auto-generate or enter manually) |
+| Create DB User | Create a new database user with password and privilege grants |
 | Service Status | Shows running/stopped state of all installed services |
 | Restart Services | Restarts web server, PHP-FPM, and all databases |
 | View Logs | Pick a service log and view the last 50 lines |
@@ -74,6 +75,7 @@ Navigate with arrow keys and ENTER. The menu loops until you choose **Exit**.
 - **Adminer** — downloads the single-file `adminer.php` database manager into your docroot. Supports MySQL, MariaDB, PostgreSQL, MongoDB — all in one file.
 - **Show DB Credentials** — displays stored database usernames and passwords. Each credential is live-validated against the actual database — if someone changed the password via phpMyAdmin, CLI, or any other tool, it shows `[CHANGED externally]` instead of `[VALID]`. Credentials are stored in `/etc/stack-panel.creds` (root-only, `chmod 600`).
 - **Change DB Password** — pick an installed database, then choose to auto-generate a secure 20-char password or enter one manually. The new password is applied directly to the database and the credentials store is updated. Supports MySQL, MariaDB, PostgreSQL, and MongoDB.
+- **Create DB User** — create a new user on any installed database. Prompts for username, password (auto or manual), and privilege level. For MySQL/MariaDB/PostgreSQL you can grant all privileges, access to a specific database, or no grants. For MongoDB you pick the auth database and role (readWrite, read, dbAdmin, userAdmin, root). New credentials are saved to the store.
 - **Service Status** — shows whether each installed service (web server, PHP-FPM, databases) is running, stopped, or failed.
 - **Restart All Services** — restarts every installed service and reports success/failure for each.
 - **View Logs** — sub-menu to pick a service log (Apache/Nginx error/access, PHP-FPM, MySQL, PostgreSQL, MongoDB). Displays the last 50 lines.
@@ -203,6 +205,17 @@ docker run --rm stack-test
   PASS  change_db_password offers manual entry
   PASS  change_db_password saves updated cred
 
+  create_db_user
+  PASS  create_db_user handles no databases
+  PASS  create_db_user has MySQL CREATE USER
+  PASS  create_db_user has PostgreSQL CREATE USER
+  PASS  create_db_user has MongoDB createUser
+  PASS  create_db_user supports grant all
+  PASS  create_db_user supports grant specific db
+  PASS  create_db_user supports MongoDB roles
+  PASS  create_db_user saves new credential
+  PASS  Multiple users per DB in creds file
+
 [Phase 2] --panel Flag Routing
   PASS  main() checks --panel flag
   PASS  main() calls load_stack_config for --panel
@@ -216,6 +229,7 @@ docker run --rm stack-test
   PASS  Panel has adminer option
   PASS  Panel has db-creds option
   PASS  Panel has db-passwd option
+  PASS  Panel has db-user option
   PASS  Panel has status option
   PASS  Panel has restart option
   PASS  Panel has logs option
@@ -256,9 +270,9 @@ docker run --rm stack-test
 ========================================
   Test Results
 ========================================
-  Passed: 75
+  Passed: 85
   Failed: 0
-  Total:  75
+  Total:  85
 
   ALL TESTS PASSED
 ```
@@ -268,9 +282,9 @@ docker run --rm stack-test
 | Phase | Area | Tests |
 |-------|------|-------|
 | 0 | Bash syntax (`bash -n`) | 1 |
-| 1 | Config save/load, phpinfo, file explorer, browser open, service status, password generation, credential storage/display, password change | 40 |
+| 1 | Config save/load, phpinfo, file explorer, browser open, service status, password generation, credential storage/display, password change, user creation | 49 |
 | 2 | `--panel` flag routing in `main()` | 3 |
-| 3 | All 11 control panel menu items present | 11 |
+| 3 | All 12 control panel menu items present | 12 |
 | 4 | Adminer download + config update | 2 |
 | 5 | Log file paths for all services | 7 |
 | 6 | explorer.php security (no dangerous functions, traversal guard) | 3 |
