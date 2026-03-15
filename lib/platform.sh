@@ -189,6 +189,14 @@ _systemctl_available() {
     [ "$SVC_MGR" = "systemctl" ] && pidof systemd >/dev/null 2>&1
 }
 
+# Docker/container images block service starts via policy-rc.d — remove it
+_ensure_services_allowed() {
+    if ! _systemctl_available && [ -f /usr/sbin/policy-rc.d ]; then
+        rm -f /usr/sbin/policy-rc.d
+        log_info "Removed policy-rc.d (container detected) to allow services to start."
+    fi
+}
+
 svc_start() {
     case "$SVC_MGR" in
         systemctl)

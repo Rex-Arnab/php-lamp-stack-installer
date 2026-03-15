@@ -32,6 +32,7 @@ trap cleanup EXIT
 
 # Detect OS and set all platform variables
 detect_os
+_ensure_services_allowed
 
 # ── Selection variables ──────────────────────────────────────────────────────
 
