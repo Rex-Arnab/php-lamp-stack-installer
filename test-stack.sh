@@ -60,28 +60,37 @@ echo -e "========================================${NC}\n"
 # ── Test 0: Syntax check ────────────────────────────────────────────────────
 echo -e "${CYAN}[Phase 0] Syntax Validation${NC}"
 assert "bash -n setup-stack.sh" bash -n /opt/setup-stack.sh
+assert "bash -n lib/platform.sh" bash -n /opt/lib/platform.sh
+assert "bash -n lib/menus.sh" bash -n /opt/lib/menus.sh
+assert "bash -n lib/install.sh" bash -n /opt/lib/install.sh
+assert "bash -n lib/panel.sh" bash -n /opt/lib/panel.sh
 
 # ── Test 1: Source the script and test functions in isolation ─────────────────
-echo -e "\n${CYAN}[Phase 1] Function Unit Tests (sourcing script)${NC}"
+echo -e "\n${CYAN}[Phase 1] Function Unit Tests (sourcing modules)${NC}"
 
-# We need to source the script without running main().
-# Strategy: extract everything except the last line (main "$@") and the root check
-TEMP_SOURCE="/tmp/stack_source_test.sh"
-# Remove set -e, root check, initial apt update, dialog detection, and final main call
-sed '
-    /^set -e$/d
-    /^if \[ "$(id -u)" -ne 0 \]/,/^fi$/d
-    /^# Detect dialog tool/,/^log_info "Using/d
-    /^# Initial apt update/,/^apt-get update/d
-    /^main "\$@"$/d
-' /opt/setup-stack.sh > "$TEMP_SOURCE"
+# Source modules directly — no need to extract from monolithic file
+source /opt/lib/platform.sh 2>/dev/null || true
+source /opt/lib/menus.sh 2>/dev/null || true
+source /opt/lib/install.sh 2>/dev/null || true
+source /opt/lib/panel.sh 2>/dev/null || true
 
-# shellcheck disable=SC1090
-source "$TEMP_SOURCE" 2>/dev/null || true
-
-# Set required variables AFTER sourcing (sourcing re-initializes them to defaults)
+# Set required variables AFTER sourcing
 DIALOG_BIN="dialog"
-SEL_WEBSERVER="apache2"
+DISTRO="debian"
+PKG_MGR="apt"
+SVC_MGR="systemctl"
+WEB_USER="www-data"
+WEB_GROUP="www-data"
+APACHE_PKG="apache2"
+APACHE_SVC="apache2"
+APACHE_LOG_DIR="/var/log/apache2"
+NGINX_LOG_DIR="/var/log/nginx"
+FPM_SOCK_DIR="/run/php"
+MYSQL_LOG="/var/log/mysql/error.log"
+PG_LOG_DIR="/var/log/postgresql"
+MONGO_LOG="/var/log/mongodb/mongod.log"
+DEFAULT_DOCROOT="/var/www/html"
+SEL_WEBSERVER="apache"
 SEL_DOCROOT="/var/www/html"
 SEL_PORT="80"
 SEL_MYSQL="on"
@@ -98,7 +107,7 @@ mkdir -p /var/www/html
 STACK_CONFIG="/etc/stack-panel.conf"
 save_stack_config 2>/dev/null
 assert_file "Config file created" "$STACK_CONFIG"
-assert_contains "Config has WEBSERVER" "$STACK_CONFIG" "WEBSERVER=apache2"
+assert_contains "Config has WEBSERVER" "$STACK_CONFIG" "WEBSERVER=apache"
 assert_contains "Config has PORT" "$STACK_CONFIG" "PORT=80"
 assert_contains "Config has PHP_VER" "$STACK_CONFIG" "PHP_VER=8.1"
 assert_contains "Config has HAS_MYSQL=on" "$STACK_CONFIG" "HAS_MYSQL=on"
@@ -109,7 +118,7 @@ assert_contains "Config has HAS_PHPMYADMIN=off" "$STACK_CONFIG" "HAS_PHPMYADMIN=
 # Clear vars and reload
 WEBSERVER="" DOCROOT="" PORT="" HAS_MYSQL=""
 load_stack_config 2>/dev/null
-assert "load_stack_config restores WEBSERVER" test "$SEL_WEBSERVER" = "apache2"
+assert "load_stack_config restores WEBSERVER" test "$SEL_WEBSERVER" = "apache"
 assert "load_stack_config restores PORT" test "$SEL_PORT" = "80"
 assert "load_stack_config restores HAS_MYSQL" test "$SEL_MYSQL" = "on"
 
@@ -197,13 +206,13 @@ RESULT=$(change_db_password 2>&1 </dev/null || true)
 assert "change_db_password handles empty creds file" true
 
 # Verify the function exists and has correct DB handlers
-assert_contains "change_db_password handles MySQL" /opt/setup-stack.sh "MySQL)"
-assert_contains "change_db_password handles MariaDB" /opt/setup-stack.sh "MariaDB)"
-assert_contains "change_db_password handles PostgreSQL" /opt/setup-stack.sh "PostgreSQL)"
-assert_contains "change_db_password handles MongoDB" /opt/setup-stack.sh "MongoDB)"
-assert_contains "change_db_password offers auto-generate" /opt/setup-stack.sh '"auto"'
-assert_contains "change_db_password offers manual entry" /opt/setup-stack.sh '"manual"'
-assert_contains "change_db_password saves updated cred" /opt/setup-stack.sh 'save_credential "$selected" "$db_user" "$new_pass"'
+assert_contains "change_db_password handles MySQL" /opt/lib/panel.sh "MySQL)"
+assert_contains "change_db_password handles MariaDB" /opt/lib/panel.sh "MariaDB)"
+assert_contains "change_db_password handles PostgreSQL" /opt/lib/panel.sh "PostgreSQL)"
+assert_contains "change_db_password handles MongoDB" /opt/lib/panel.sh "MongoDB)"
+assert_contains "change_db_password offers auto-generate" /opt/lib/panel.sh '"auto"'
+assert_contains "change_db_password offers manual entry" /opt/lib/panel.sh '"manual"'
+assert_contains "change_db_password saves updated cred" /opt/lib/panel.sh 'save_credential "$selected" "$db_user" "$new_pass"'
 
 # -- Test create_db_user --
 echo -e "\n${YELLOW}  create_db_user${NC}"
@@ -215,13 +224,13 @@ RESULT=$(create_db_user 2>&1 </dev/null || true)
 assert "create_db_user handles no databases" true
 
 # Verify function structure
-assert_contains "create_db_user has MySQL CREATE USER" /opt/setup-stack.sh "CREATE USER '\${new_user}'@'localhost'"
-assert_contains "create_db_user has PostgreSQL CREATE USER" /opt/setup-stack.sh "CREATE USER \${new_user} WITH PASSWORD"
-assert_contains "create_db_user has MongoDB createUser" /opt/setup-stack.sh "db.createUser"
-assert_contains "create_db_user supports grant all" /opt/setup-stack.sh "GRANT ALL PRIVILEGES ON \*.\*"
-assert_contains "create_db_user supports grant specific db" /opt/setup-stack.sh 'GRANT ALL PRIVILEGES ON.*grant_db'
-assert_contains "create_db_user supports MongoDB roles" /opt/setup-stack.sh "readWrite"
-assert_contains "create_db_user saves new credential" /opt/setup-stack.sh 'save_credential "${selected}:${new_user}"'
+assert_contains "create_db_user has MySQL CREATE USER" /opt/lib/panel.sh "CREATE USER '\${new_user}'@'localhost'"
+assert_contains "create_db_user has PostgreSQL CREATE USER" /opt/lib/panel.sh "CREATE USER \${new_user} WITH PASSWORD"
+assert_contains "create_db_user has MongoDB createUser" /opt/lib/panel.sh "db.createUser"
+assert_contains "create_db_user supports grant all" /opt/lib/panel.sh "GRANT ALL PRIVILEGES ON \*.\*"
+assert_contains "create_db_user supports grant specific db" /opt/lib/panel.sh 'GRANT ALL PRIVILEGES ON.*grant_db'
+assert_contains "create_db_user supports MongoDB roles" /opt/lib/panel.sh "readWrite"
+assert_contains "create_db_user saves new credential" /opt/lib/panel.sh 'save_credential "${selected}:${new_user}"'
 
 # Verify the credential key format includes username (allows multiple users per DB)
 rm -f "$STACK_CREDS"
@@ -242,18 +251,18 @@ RESULT=$(remove_services 2>&1 </dev/null || true)
 assert "remove_services handles no services" true
 
 # Verify function structure
-assert_contains "remove_services stops before purging" /opt/setup-stack.sh 'systemctl stop'
-assert_contains "remove_services supports purge option" /opt/setup-stack.sh 'apt_action="purge"'
-assert_contains "remove_services runs autoremove" /opt/setup-stack.sh 'apt-get autoremove'
-assert_contains "remove_services updates config for MySQL" /opt/setup-stack.sh "HAS_MYSQL=off"
-assert_contains "remove_services updates config for MariaDB" /opt/setup-stack.sh "HAS_MARIADB=off"
-assert_contains "remove_services updates config for PostgreSQL" /opt/setup-stack.sh "HAS_POSTGRESQL=off"
-assert_contains "remove_services updates config for MongoDB" /opt/setup-stack.sh "HAS_MONGODB=off"
-assert_contains "remove_services cleans credentials" /opt/setup-stack.sh "sed -i '/^MySQL/d'"
-assert_contains "remove_services has confirmation dialog" /opt/setup-stack.sh "Confirm Removal"
-assert_contains "remove_services asks about data" /opt/setup-stack.sh "Remove Data"
-assert_contains "remove_services handles phpmyadmin" /opt/setup-stack.sh "HAS_PHPMYADMIN=off"
-assert_contains "remove_services handles adminer" /opt/setup-stack.sh "HAS_ADMINER=off"
+assert_contains "remove_services stops before purging" /opt/lib/panel.sh 'svc_stop'
+assert_contains "remove_services supports purge option" /opt/lib/panel.sh 'PURGE_MODE="purge"'
+assert_contains "remove_services runs autoremove" /opt/lib/panel.sh 'pkg_autoremove'
+assert_contains "remove_services updates config for MySQL" /opt/lib/panel.sh "HAS_MYSQL=off"
+assert_contains "remove_services updates config for MariaDB" /opt/lib/panel.sh "HAS_MARIADB=off"
+assert_contains "remove_services updates config for PostgreSQL" /opt/lib/panel.sh "HAS_POSTGRESQL=off"
+assert_contains "remove_services updates config for MongoDB" /opt/lib/panel.sh "HAS_MONGODB=off"
+assert_contains "remove_services cleans credentials" /opt/lib/panel.sh "sed_i '/^MySQL/d'"
+assert_contains "remove_services has confirmation dialog" /opt/lib/panel.sh "Confirm Removal"
+assert_contains "remove_services asks about data" /opt/lib/panel.sh "Remove Data"
+assert_contains "remove_services handles phpmyadmin" /opt/lib/panel.sh "HAS_PHPMYADMIN=off"
+assert_contains "remove_services handles adminer" /opt/lib/panel.sh "HAS_ADMINER=off"
 
 # Test that config gets updated when a service is removed
 # Simulate: write config with mysql=on, then verify sed pattern works
@@ -286,19 +295,19 @@ assert_contains "main() calls control_panel for --panel" /opt/setup-stack.sh "co
 # ── Test 3: Control panel menu structure ─────────────────────────────────────
 echo -e "\n${CYAN}[Phase 3] Control Panel Structure${NC}"
 
-assert_contains "Panel has open-site option" /opt/setup-stack.sh '"open-site"'
-assert_contains "Panel has phpinfo option" /opt/setup-stack.sh '"phpinfo"'
-assert_contains "Panel has files option" /opt/setup-stack.sh '"files"'
-assert_contains "Panel has phpmyadmin option" /opt/setup-stack.sh '"phpmyadmin"'
-assert_contains "Panel has adminer option" /opt/setup-stack.sh '"adminer"'
-assert_contains "Panel has db-creds option" /opt/setup-stack.sh '"db-creds"'
-assert_contains "Panel has db-passwd option" /opt/setup-stack.sh '"db-passwd"'
-assert_contains "Panel has db-user option" /opt/setup-stack.sh '"db-user"'
-assert_contains "Panel has status option" /opt/setup-stack.sh '"status"'
-assert_contains "Panel has restart option" /opt/setup-stack.sh '"restart"'
-assert_contains "Panel has remove option" /opt/setup-stack.sh '"remove"'
-assert_contains "Panel has logs option" /opt/setup-stack.sh '"logs"'
-assert_contains "Panel has exit option" /opt/setup-stack.sh '"exit"'
+assert_contains "Panel has open-site option" /opt/lib/panel.sh '"open-site"'
+assert_contains "Panel has phpinfo option" /opt/lib/panel.sh '"phpinfo"'
+assert_contains "Panel has files option" /opt/lib/panel.sh '"files"'
+assert_contains "Panel has phpmyadmin option" /opt/lib/panel.sh '"phpmyadmin"'
+assert_contains "Panel has adminer option" /opt/lib/panel.sh '"adminer"'
+assert_contains "Panel has db-creds option" /opt/lib/panel.sh '"db-creds"'
+assert_contains "Panel has db-passwd option" /opt/lib/panel.sh '"db-passwd"'
+assert_contains "Panel has db-user option" /opt/lib/panel.sh '"db-user"'
+assert_contains "Panel has status option" /opt/lib/panel.sh '"status"'
+assert_contains "Panel has restart option" /opt/lib/panel.sh '"restart"'
+assert_contains "Panel has remove option" /opt/lib/panel.sh '"remove"'
+assert_contains "Panel has logs option" /opt/lib/panel.sh '"logs"'
+assert_contains "Panel has exit option" /opt/lib/panel.sh '"exit"'
 
 # ── Test 4: install_adminer (download simulation) ───────────────────────────
 echo -e "\n${CYAN}[Phase 4] Adminer Install${NC}"
@@ -322,13 +331,13 @@ install_adminer 2>/dev/null && {
 # ── Test 5: Log menu coverage ───────────────────────────────────────────────
 echo -e "\n${CYAN}[Phase 5] Log Paths in show_logs_menu${NC}"
 
-assert_contains "Apache error log path" /opt/setup-stack.sh "custom-stack-error.log"
-assert_contains "Apache access log path" /opt/setup-stack.sh "custom-stack-access.log"
-assert_contains "Nginx error log path" /opt/setup-stack.sh "/var/log/nginx/custom-stack-error.log"
-assert_contains "PHP-FPM log path" /opt/setup-stack.sh 'php${php_ver}-fpm.log'
-assert_contains "MySQL log path" /opt/setup-stack.sh "/var/log/mysql/error.log"
-assert_contains "PostgreSQL log path" /opt/setup-stack.sh "/var/log/postgresql/"
-assert_contains "MongoDB log path" /opt/setup-stack.sh "/var/log/mongodb/mongod.log"
+assert_contains "Apache error log path" /opt/lib/panel.sh "custom-stack-error.log"
+assert_contains "Apache access log path" /opt/lib/panel.sh "custom-stack-access.log"
+assert_contains "Nginx error log path" /opt/lib/panel.sh "custom-stack-error.log"
+assert_contains "PHP-FPM log path" /opt/lib/panel.sh 'php${php_ver}-fpm.log'
+assert_contains "MySQL log path" /opt/lib/panel.sh 'MYSQL_LOG'
+assert_contains "PostgreSQL log path" /opt/lib/panel.sh 'PG_LOG_DIR'
+assert_contains "MongoDB log path" /opt/lib/panel.sh 'MONGO_LOG'
 
 # ── Test 6: Security checks on explorer.php ─────────────────────────────────
 echo -e "\n${CYAN}[Phase 6] explorer.php Security${NC}"

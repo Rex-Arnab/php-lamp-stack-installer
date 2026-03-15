@@ -9,8 +9,9 @@ RUN apt-get update -qq && \
     apt-get install -y -qq dialog curl gnupg lsb-release software-properties-common sudo
 
 COPY setup-stack.sh /opt/setup-stack.sh
+COPY lib/ /opt/lib/
 COPY test-stack.sh /opt/test-stack.sh
-RUN chmod +x /opt/setup-stack.sh /opt/test-stack.sh
+RUN chmod +x /opt/setup-stack.sh /opt/test-stack.sh /opt/lib/*.sh
 
 WORKDIR /opt
 CMD ["/opt/test-stack.sh"]
