@@ -20,6 +20,13 @@ _init_stack_paths() {
     fi
 }
 
+_get_db_root_pass() {
+    _init_stack_paths
+    local service="$1"
+    [ -f "$STACK_CREDS" ] || return 1
+    grep "^${service}|" "$STACK_CREDS" | head -1 | cut -d'|' -f3
+}
+
 generate_password() {
     LC_ALL=C tr -dc 'A-Za-z0-9!@#$%&*' < /dev/urandom | head -c 20 || true
 }
@@ -543,14 +550,14 @@ change_db_password() {
     local error_msg=""
     case "$selected" in
         MySQL)
-            if mysql -e "ALTER USER '${db_user}'@'localhost' IDENTIFIED BY '${new_pass}'; FLUSH PRIVILEGES;" 2>/tmp/stack_pw_err; then
+            if mysql -u"$db_user" -p"$old_pass" -e "ALTER USER '${db_user}'@'localhost' IDENTIFIED BY '${new_pass}'; FLUSH PRIVILEGES;" 2>/tmp/stack_pw_err; then
                 success=true
             else
                 error_msg=$(cat /tmp/stack_pw_err)
             fi
             ;;
         MariaDB)
-            if mariadb -e "ALTER USER '${db_user}'@'localhost' IDENTIFIED BY '${new_pass}'; FLUSH PRIVILEGES;" 2>/tmp/stack_pw_err; then
+            if mariadb -u"$db_user" -p"$old_pass" -e "ALTER USER '${db_user}'@'localhost' IDENTIFIED BY '${new_pass}'; FLUSH PRIVILEGES;" 2>/tmp/stack_pw_err; then
                 success=true
             else
                 error_msg=$(cat /tmp/stack_pw_err)
@@ -718,8 +725,12 @@ create_db_user() {
 
     local success=false
     local error_msg=""
+    local root_pass=""
     case "$selected" in
         MySQL)
+            root_pass=$(_get_db_root_pass "MySQL" || true)
+            local auth_args=""
+            [ -n "$root_pass" ] && auth_args="-uroot -p${root_pass}"
             local sql="CREATE USER '${new_user}'@'localhost' IDENTIFIED BY '${new_pass}';"
             if [ "$grant_db" = "*" ]; then
                 sql="$sql GRANT ALL PRIVILEGES ON *.* TO '${new_user}'@'localhost' WITH GRANT OPTION;"
@@ -727,13 +738,16 @@ create_db_user() {
                 sql="$sql GRANT ALL PRIVILEGES ON \`${grant_db}\`.* TO '${new_user}'@'localhost';"
             fi
             sql="$sql FLUSH PRIVILEGES;"
-            if mysql -e "$sql" 2>/tmp/stack_pw_err; then
+            if mysql $auth_args -e "$sql" 2>/tmp/stack_pw_err; then
                 success=true
             else
                 error_msg=$(cat /tmp/stack_pw_err)
             fi
             ;;
         MariaDB)
+            root_pass=$(_get_db_root_pass "MariaDB" || true)
+            local auth_args=""
+            [ -n "$root_pass" ] && auth_args="-uroot -p${root_pass}"
             local sql="CREATE USER '${new_user}'@'localhost' IDENTIFIED BY '${new_pass}';"
             if [ "$grant_db" = "*" ]; then
                 sql="$sql GRANT ALL PRIVILEGES ON *.* TO '${new_user}'@'localhost' WITH GRANT OPTION;"
@@ -741,7 +755,7 @@ create_db_user() {
                 sql="$sql GRANT ALL PRIVILEGES ON \`${grant_db}\`.* TO '${new_user}'@'localhost';"
             fi
             sql="$sql FLUSH PRIVILEGES;"
-            if mariadb -e "$sql" 2>/tmp/stack_pw_err; then
+            if mariadb $auth_args -e "$sql" 2>/tmp/stack_pw_err; then
                 success=true
             else
                 error_msg=$(cat /tmp/stack_pw_err)
