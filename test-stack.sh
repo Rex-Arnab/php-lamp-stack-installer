@@ -182,6 +182,29 @@ rm -f "$STACK_CREDS"
 RESULT=$(show_db_credentials 2>&1 </dev/null || true)
 assert "show_db_credentials handles missing file" true
 
+# -- Test change_db_password --
+echo -e "\n${YELLOW}  change_db_password${NC}"
+
+# change_db_password with no creds file — should not crash
+rm -f "$STACK_CREDS"
+RESULT=$(change_db_password 2>&1 </dev/null || true)
+assert "change_db_password handles missing creds file" true
+
+# change_db_password with empty creds file — should not crash
+touch "$STACK_CREDS"
+chmod 600 "$STACK_CREDS"
+RESULT=$(change_db_password 2>&1 </dev/null || true)
+assert "change_db_password handles empty creds file" true
+
+# Verify the function exists and has correct DB handlers
+assert_contains "change_db_password handles MySQL" /opt/setup-stack.sh "MySQL)"
+assert_contains "change_db_password handles MariaDB" /opt/setup-stack.sh "MariaDB)"
+assert_contains "change_db_password handles PostgreSQL" /opt/setup-stack.sh "PostgreSQL)"
+assert_contains "change_db_password handles MongoDB" /opt/setup-stack.sh "MongoDB)"
+assert_contains "change_db_password offers auto-generate" /opt/setup-stack.sh '"auto"'
+assert_contains "change_db_password offers manual entry" /opt/setup-stack.sh '"manual"'
+assert_contains "change_db_password saves updated cred" /opt/setup-stack.sh 'save_credential "$selected" "$db_user" "$new_pass"'
+
 # ── Test 2: --panel flag parsing ─────────────────────────────────────────────
 echo -e "\n${CYAN}[Phase 2] --panel Flag Routing${NC}"
 
@@ -199,6 +222,7 @@ assert_contains "Panel has files option" /opt/setup-stack.sh '"files"'
 assert_contains "Panel has phpmyadmin option" /opt/setup-stack.sh '"phpmyadmin"'
 assert_contains "Panel has adminer option" /opt/setup-stack.sh '"adminer"'
 assert_contains "Panel has db-creds option" /opt/setup-stack.sh '"db-creds"'
+assert_contains "Panel has db-passwd option" /opt/setup-stack.sh '"db-passwd"'
 assert_contains "Panel has status option" /opt/setup-stack.sh '"status"'
 assert_contains "Panel has restart option" /opt/setup-stack.sh '"restart"'
 assert_contains "Panel has logs option" /opt/setup-stack.sh '"logs"'

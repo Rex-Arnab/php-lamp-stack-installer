@@ -975,6 +975,112 @@ show_logs_menu() {
     rm -f "$tmplog"
 }
 
+change_db_password() {
+    if [ ! -f "$STACK_CREDS" ] || [ ! -s "$STACK_CREDS" ]; then
+        "$DIALOG_BIN" --title "Change Password" \
+            --msgbox "No databases with stored credentials found." 7 50 2>/dev/null
+        return
+    fi
+
+    # Build menu from stored credentials
+    local items=""
+    local tag_count=0
+    while IFS='|' read -r service user password; do
+        [ -z "$service" ] && continue
+        items="$items \"${service}\" \"User: ${user}\" off"
+        tag_count=$((tag_count + 1))
+    done < "$STACK_CREDS"
+
+    if [ "$tag_count" -eq 0 ]; then
+        "$DIALOG_BIN" --title "Change Password" \
+            --msgbox "No databases with stored credentials found." 7 50 2>/dev/null
+        return
+    fi
+
+    local height=$((tag_count + 8))
+    local selected
+    selected=$(eval run_dialog --title \"Change DB Password\" \
+        --radiolist \"'Select database:'\" "$height" 55 "$tag_count" \
+        "$items") || return 0
+
+    [ -z "$selected" ] && return 0
+
+    # Ask: auto-generate or enter manually
+    local new_pass=""
+    local method
+    method=$(run_dialog --title "New Password for ${selected}" \
+        --menu "How would you like to set the new password?" 12 55 2 \
+        "auto"   "Auto-generate secure password" \
+        "manual" "Enter password manually") || return 0
+
+    if [ "$method" = "auto" ]; then
+        new_pass=$(generate_password)
+    else
+        new_pass=$(run_dialog --title "New Password for ${selected}" \
+            --inputbox "Enter new password:" 8 55 "") || return 0
+        if [ -z "$new_pass" ]; then
+            "$DIALOG_BIN" --title "Error" --msgbox "Password cannot be empty." 7 40 2>/dev/null
+            return
+        fi
+    fi
+
+    # Read current user for this service
+    local db_user=""
+    while IFS='|' read -r service user password; do
+        if [ "$service" = "$selected" ]; then
+            db_user="$user"
+            break
+        fi
+    done < "$STACK_CREDS"
+
+    # Execute the password change
+    local success=false
+    local error_msg=""
+    case "$selected" in
+        MySQL)
+            if mysql -e "ALTER USER '${db_user}'@'localhost' IDENTIFIED BY '${new_pass}'; FLUSH PRIVILEGES;" 2>/tmp/stack_pw_err; then
+                success=true
+            else
+                error_msg=$(cat /tmp/stack_pw_err)
+            fi
+            ;;
+        MariaDB)
+            if mariadb -e "ALTER USER '${db_user}'@'localhost' IDENTIFIED BY '${new_pass}'; FLUSH PRIVILEGES;" 2>/tmp/stack_pw_err; then
+                success=true
+            else
+                error_msg=$(cat /tmp/stack_pw_err)
+            fi
+            ;;
+        PostgreSQL)
+            if su - postgres -c "psql -c \"ALTER USER ${db_user} PASSWORD '${new_pass}';\"" 2>/tmp/stack_pw_err; then
+                success=true
+            else
+                error_msg=$(cat /tmp/stack_pw_err)
+            fi
+            ;;
+        MongoDB)
+            if mongosh --quiet --eval "use admin; db.changeUserPassword('${db_user}', '${new_pass}');" 2>/tmp/stack_pw_err; then
+                success=true
+            else
+                error_msg=$(cat /tmp/stack_pw_err)
+            fi
+            ;;
+        *)
+            error_msg="Unknown database service: $selected"
+            ;;
+    esac
+    rm -f /tmp/stack_pw_err
+
+    if [ "$success" = true ]; then
+        save_credential "$selected" "$db_user" "$new_pass"
+        "$DIALOG_BIN" --title "Password Changed" \
+            --msgbox "${selected} password updated successfully.\n\n  User:     ${db_user}\n  Password: ${new_pass}\n\nThis has been saved to the credentials store." 12 55 2>/dev/null
+    else
+        "$DIALOG_BIN" --title "Error" \
+            --msgbox "Failed to change ${selected} password.\n\n${error_msg}" 12 60 2>/dev/null
+    fi
+}
+
 control_panel() {
     local docroot="${DOCROOT:-$SEL_DOCROOT}"
     local port="${PORT:-$SEL_PORT}"
@@ -982,13 +1088,14 @@ control_panel() {
     while true; do
         local choice
         choice=$(run_dialog --title "Stack Control Panel" \
-            --menu "Select an action:" 22 60 10 \
+            --menu "Select an action:" 24 60 11 \
             "open-site"   "Open Site in Browser" \
             "phpinfo"     "PHP Info Page" \
             "files"       "File Explorer" \
             "phpmyadmin"  "phpMyAdmin" \
             "adminer"     "Adminer (DB Manager)" \
             "db-creds"    "Show DB Credentials" \
+            "db-passwd"   "Change DB Password" \
             "status"      "Service Status" \
             "restart"     "Restart All Services" \
             "logs"        "View Logs" \
@@ -1022,6 +1129,9 @@ control_panel() {
                 ;;
             db-creds)
                 show_db_credentials
+                ;;
+            db-passwd)
+                change_db_password
                 ;;
             status)
                 show_service_status

@@ -22,6 +22,7 @@ Interactive LAMP/LEMP stack setup script with a post-installation control panel.
 | phpMyAdmin | Installs if missing, then opens in browser |
 | Adminer | Downloads single-file DB manager to docroot |
 | DB Credentials | Shows stored database usernames/passwords with live validation |
+| Change DB Password | Reset a database password (auto-generate or enter manually) |
 | Service Status | Shows running/stopped state of all installed services |
 | Restart Services | Restarts web server, PHP-FPM, and all databases |
 | View Logs | Pick a service log and view the last 50 lines |
@@ -72,6 +73,7 @@ Navigate with arrow keys and ENTER. The menu loops until you choose **Exit**.
 - **phpMyAdmin** — if not installed, prompts to install it (`apt-get install phpmyadmin`). For Nginx, auto-symlinks into your docroot. Then opens in browser.
 - **Adminer** — downloads the single-file `adminer.php` database manager into your docroot. Supports MySQL, MariaDB, PostgreSQL, MongoDB — all in one file.
 - **Show DB Credentials** — displays stored database usernames and passwords. Each credential is live-validated against the actual database — if someone changed the password via phpMyAdmin, CLI, or any other tool, it shows `[CHANGED externally]` instead of `[VALID]`. Credentials are stored in `/etc/stack-panel.creds` (root-only, `chmod 600`).
+- **Change DB Password** — pick an installed database, then choose to auto-generate a secure 20-char password or enter one manually. The new password is applied directly to the database and the credentials store is updated. Supports MySQL, MariaDB, PostgreSQL, and MongoDB.
 - **Service Status** — shows whether each installed service (web server, PHP-FPM, databases) is running, stopped, or failed.
 - **Restart All Services** — restarts every installed service and reports success/failure for each.
 - **View Logs** — sub-menu to pick a service log (Apache/Nginx error/access, PHP-FPM, MySQL, PostgreSQL, MongoDB). Displays the last 50 lines.
@@ -190,6 +192,17 @@ docker run --rm stack-test
   PASS  show_db_credentials doesn't crash
   PASS  show_db_credentials handles missing file
 
+  change_db_password
+  PASS  change_db_password handles missing creds file
+  PASS  change_db_password handles empty creds file
+  PASS  change_db_password handles MySQL
+  PASS  change_db_password handles MariaDB
+  PASS  change_db_password handles PostgreSQL
+  PASS  change_db_password handles MongoDB
+  PASS  change_db_password offers auto-generate
+  PASS  change_db_password offers manual entry
+  PASS  change_db_password saves updated cred
+
 [Phase 2] --panel Flag Routing
   PASS  main() checks --panel flag
   PASS  main() calls load_stack_config for --panel
@@ -202,6 +215,7 @@ docker run --rm stack-test
   PASS  Panel has phpmyadmin option
   PASS  Panel has adminer option
   PASS  Panel has db-creds option
+  PASS  Panel has db-passwd option
   PASS  Panel has status option
   PASS  Panel has restart option
   PASS  Panel has logs option
@@ -242,9 +256,9 @@ docker run --rm stack-test
 ========================================
   Test Results
 ========================================
-  Passed: 65
+  Passed: 75
   Failed: 0
-  Total:  65
+  Total:  75
 
   ALL TESTS PASSED
 ```
@@ -254,9 +268,9 @@ docker run --rm stack-test
 | Phase | Area | Tests |
 |-------|------|-------|
 | 0 | Bash syntax (`bash -n`) | 1 |
-| 1 | Config save/load, phpinfo, file explorer, browser open, service status, password generation, credential storage/display | 31 |
+| 1 | Config save/load, phpinfo, file explorer, browser open, service status, password generation, credential storage/display, password change | 40 |
 | 2 | `--panel` flag routing in `main()` | 3 |
-| 3 | All 10 control panel menu items present | 10 |
+| 3 | All 11 control panel menu items present | 11 |
 | 4 | Adminer download + config update | 2 |
 | 5 | Log file paths for all services | 7 |
 | 6 | explorer.php security (no dangerous functions, traversal guard) | 3 |
