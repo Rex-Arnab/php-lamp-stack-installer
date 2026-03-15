@@ -1,24 +1,31 @@
-#\!/bin/bash
+#!/bin/bash
 # ==============================================================================
-# Control panel functions
+# Control panel functions — inline terminal prompts (no dialog dependency)
 # ==============================================================================
 
 # ── Section 4: Control Panel ─────────────────────────────────────────────────
 
-STACK_CONFIG="/etc/stack-panel.conf"
-STACK_CREDS="/etc/stack-panel.creds"
+STACK_CONFIG=""
+STACK_CREDS=""
 
-# macOS: use user-level config since /etc requires root
-if [ "$DISTRO" = "macos" ]; then
-    STACK_CONFIG="$HOME/.stack-panel.conf"
-    STACK_CREDS="$HOME/.stack-panel.creds"
-fi
+# Set config/creds paths based on OS (called after detect_os)
+_init_stack_paths() {
+    [ -n "$STACK_CONFIG" ] && return
+    if [ "$DISTRO" = "macos" ]; then
+        STACK_CONFIG="$HOME/.stack-panel.conf"
+        STACK_CREDS="$HOME/.stack-panel.creds"
+    else
+        STACK_CONFIG="/etc/stack-panel.conf"
+        STACK_CREDS="/etc/stack-panel.creds"
+    fi
+}
 
 generate_password() {
-    tr -dc 'A-Za-z0-9!@#$%&*' < /dev/urandom | head -c 20 || true
+    LC_ALL=C tr -dc 'A-Za-z0-9!@#$%&*' < /dev/urandom | head -c 20 || true
 }
 
 save_credential() {
+    _init_stack_paths
     local service="$1" user="$2" password="$3"
     if [ ! -f "$STACK_CREDS" ]; then
         touch "$STACK_CREDS"
@@ -29,6 +36,7 @@ save_credential() {
 }
 
 save_stack_config() {
+    _init_stack_paths
     cat > "$STACK_CONFIG" <<EOF
 WEBSERVER=${SEL_WEBSERVER}
 DOCROOT=${SEL_DOCROOT}
@@ -46,6 +54,7 @@ EOF
 }
 
 load_stack_config() {
+    _init_stack_paths
     if [ ! -f "$STACK_CONFIG" ]; then
         log_error "No stack config found at $STACK_CONFIG"
         log_error "Run the installer first, or re-run without --panel."
@@ -86,7 +95,6 @@ open_in_browser() {
     else
         log_info "No display detected. Open this URL manually:"
         echo -e "  ${GREEN}${url}${NC}"
-        "$DIALOG_BIN" --title "URL" --msgbox "No display detected.\nOpen this URL in your browser:\n\n$url" 10 60 2>/dev/null
     fi
 }
 
@@ -198,9 +206,34 @@ install_phpmyadmin() {
             fi
             ;;
         macos)
-            log_warn "phpMyAdmin: download manually from https://www.phpmyadmin.net/"
-            log_warn "Extract to ${docroot}/phpmyadmin"
-            return
+            local pma_ver="5.2.3"
+            local pma_url="https://files.phpmyadmin.net/phpMyAdmin/${pma_ver}/phpMyAdmin-${pma_ver}-all-languages.zip"
+            local pma_tmp="/tmp/phpmyadmin.zip"
+
+            log_info "Downloading phpMyAdmin ${pma_ver}..."
+            curl -fsSL -o "$pma_tmp" "$pma_url" || { log_error "Download failed."; return 1; }
+
+            log_info "Extracting to ${docroot}/phpmyadmin..."
+            rm -rf "${docroot}/phpmyadmin" 2>/dev/null
+            unzip -q "$pma_tmp" -d "$docroot"
+            mv "${docroot}/phpMyAdmin-${pma_ver}-all-languages" "${docroot}/phpmyadmin"
+            rm -f "$pma_tmp"
+
+            # Create config with proper types for PHP 8.5 compatibility
+            local blowfish_secret
+            blowfish_secret=$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 32 || true)
+            cat > "${docroot}/phpmyadmin/config.inc.php" <<PMACONF
+<?php
+\$cfg['blowfish_secret'] = '${blowfish_secret}';
+\$i = 0;
+\$i++;
+\$cfg['Servers'][\$i]['auth_type'] = 'cookie';
+\$cfg['Servers'][\$i]['host'] = '127.0.0.1';
+\$cfg['Servers'][\$i]['compress'] = false;
+\$cfg['Servers'][\$i]['AllowNoPassword'] = false;
+\$cfg['UploadDir'] = '';
+\$cfg['SaveDir'] = '';
+PMACONF
             ;;
     esac
 
@@ -226,62 +259,12 @@ install_adminer() {
     log_success "Adminer installed at $target"
 }
 
-show_service_status() {
+# ── Service status & restart ────────────────────────────────────────────────
+
+_get_service_list() {
     local webserver="${WEBSERVER:-$SEL_WEBSERVER}"
     local php_ver="${PHP_VER}"
-    local status_text=""
-
-    # Web server
-    local ws_svc=""
-    if [ "$webserver" = "apache" ]; then
-        ws_svc="$APACHE_SVC"
-    elif [ "$webserver" = "nginx" ]; then
-        ws_svc="nginx"
-    fi
-
-    local fpm_svc
-    fpm_svc=$(get_fpm_service "$php_ver")
-
-    local services="$ws_svc $fpm_svc"
-
-    if [ "${HAS_MYSQL:-${SEL_MYSQL:-off}}" = "on" ]; then
-        local mysql_svc="mysql"
-        [ "$DISTRO" = "fedora" ] && mysql_svc="mysqld"
-        services="$services $mysql_svc"
-    fi
-    [ "${HAS_MARIADB:-${SEL_MARIADB:-off}}" = "on" ] && services="$services mariadb"
-    if [ "${HAS_POSTGRESQL:-${SEL_POSTGRESQL:-off}}" = "on" ]; then
-        local pg_svc="postgresql"
-        [ "$DISTRO" = "macos" ] && pg_svc="postgresql@16"
-        services="$services $pg_svc"
-    fi
-    if [ "${HAS_MONGODB:-${SEL_MONGODB:-off}}" = "on" ]; then
-        local mongo_svc="mongod"
-        [ "$DISTRO" = "macos" ] && mongo_svc="mongodb-community"
-        services="$services $mongo_svc"
-    fi
-
-    for svc in $services; do
-        [ -z "$svc" ] && continue
-        local state
-        state=$(svc_status "$svc")
-        local label
-        case "$state" in
-            active)    label="RUNNING" ;;
-            inactive)  label="STOPPED" ;;
-            failed)    label="FAILED"  ;;
-            *)         label="$state"  ;;
-        esac
-        status_text="${status_text}  ${svc}: ${label}\n"
-    done
-
-    "$DIALOG_BIN" --title "Service Status" \
-        --msgbox "$status_text" 16 50 2>/dev/null
-}
-
-panel_restart_services() {
-    local webserver="${WEBSERVER:-$SEL_WEBSERVER}"
-    local php_ver="${PHP_VER}"
+    local services=""
 
     local ws_svc=""
     [ "$webserver" = "apache" ] && ws_svc="$APACHE_SVC"
@@ -290,7 +273,7 @@ panel_restart_services() {
     local fpm_svc
     fpm_svc=$(get_fpm_service "$php_ver")
 
-    local services="$ws_svc $fpm_svc"
+    services="$ws_svc $fpm_svc"
 
     if [ "${HAS_MYSQL:-${SEL_MYSQL:-off}}" = "on" ]; then
         local mysql_svc="mysql"
@@ -309,67 +292,97 @@ panel_restart_services() {
         services="$services $mongo_svc"
     fi
 
-    local result_text=""
+    echo "$services"
+}
+
+show_service_status() {
+    local services
+    services=$(_get_service_list)
+
+    echo ""
+    echo -e "${BOLD}── Service Status ──${NC}"
+    for svc in $services; do
+        [ -z "$svc" ] && continue
+        local state
+        state=$(svc_status "$svc")
+        case "$state" in
+            active)   echo -e "  ${GREEN}RUNNING${NC}  $svc" ;;
+            inactive) echo -e "  ${YELLOW}STOPPED${NC}  $svc" ;;
+            failed)   echo -e "  ${RED}FAILED${NC}   $svc" ;;
+            *)        echo -e "  ${YELLOW}${state}${NC}     $svc" ;;
+        esac
+    done
+    echo ""
+}
+
+panel_restart_services() {
+    local services
+    services=$(_get_service_list)
+
+    echo ""
+    echo -e "${BOLD}── Restarting Services ──${NC}"
     for svc in $services; do
         [ -z "$svc" ] && continue
         if svc_restart "$svc" 2>/dev/null; then
-            result_text="${result_text}  ${svc}: restarted OK\n"
+            log_success "$svc restarted."
         else
-            result_text="${result_text}  ${svc}: FAILED to restart\n"
+            log_error "$svc FAILED to restart."
         fi
     done
-
-    "$DIALOG_BIN" --title "Restart Results" \
-        --msgbox "$result_text" 16 50 2>/dev/null
+    echo ""
 }
+
+# ── Logs ────────────────────────────────────────────────────────────────────
 
 show_logs_menu() {
     local webserver="${WEBSERVER:-$SEL_WEBSERVER}"
     local php_ver="${PHP_VER}"
-    local items=""
-    local tag_count=0
+
+    local log_names=""
+    local log_count=0
 
     if [ "$webserver" = "apache" ]; then
-        items="$items apache-error  'Apache Error Log'  off"
-        items="$items apache-access 'Apache Access Log' off"
-        tag_count=$((tag_count + 2))
+        log_names="$log_names apache-error apache-access"
+        log_count=$((log_count + 2))
     elif [ "$webserver" = "nginx" ]; then
-        items="$items nginx-error  'Nginx Error Log'  off"
-        items="$items nginx-access 'Nginx Access Log' off"
-        tag_count=$((tag_count + 2))
+        log_names="$log_names nginx-error nginx-access"
+        log_count=$((log_count + 2))
     fi
+    [ -n "$php_ver" ] && { log_names="$log_names php-fpm"; log_count=$((log_count + 1)); }
+    [ "${HAS_MYSQL:-${SEL_MYSQL:-off}}" = "on" ] && { log_names="$log_names mysql"; log_count=$((log_count + 1)); }
+    [ "${HAS_POSTGRESQL:-${SEL_POSTGRESQL:-off}}" = "on" ] && { log_names="$log_names postgresql"; log_count=$((log_count + 1)); }
+    [ "${HAS_MONGODB:-${SEL_MONGODB:-off}}" = "on" ] && { log_names="$log_names mongodb"; log_count=$((log_count + 1)); }
 
-    if [ -n "$php_ver" ]; then
-        items="$items php-fpm 'PHP-FPM Log' off"
-        tag_count=$((tag_count + 1))
-    fi
-
-    if [ "${HAS_MYSQL:-${SEL_MYSQL:-off}}" = "on" ]; then
-        items="$items mysql 'MySQL Error Log' off"
-        tag_count=$((tag_count + 1))
-    fi
-    if [ "${HAS_POSTGRESQL:-${SEL_POSTGRESQL:-off}}" = "on" ]; then
-        items="$items postgresql 'PostgreSQL Log' off"
-        tag_count=$((tag_count + 1))
-    fi
-    if [ "${HAS_MONGODB:-${SEL_MONGODB:-off}}" = "on" ]; then
-        items="$items mongodb 'MongoDB Log' off"
-        tag_count=$((tag_count + 1))
-    fi
-
-    if [ "$tag_count" -eq 0 ]; then
-        "$DIALOG_BIN" --title "Logs" --msgbox "No log sources found." 7 40 2>/dev/null
+    if [ "$log_count" -eq 0 ]; then
+        log_warn "No log sources found."
         return
     fi
 
-    local height=$((tag_count + 8))
+    echo ""
+    echo -e "${BOLD}── View Logs ──${NC}"
+    local i=0
+    for name in $log_names; do
+        i=$((i + 1))
+        echo "  $i) $name"
+    done
+    echo "  0) Back"
+    echo ""
+
     local choice
-    choice=$(eval run_dialog --title \"View Logs\" \
-        --radiolist \"'Select a log to view:'\" "$height" 55 "$tag_count" \
-        "$items") || return 0
+    read -p "  Choose: " choice
+    [ -z "$choice" ] || [ "$choice" = "0" ] && return
+
+    # Get the Nth item
+    local selected=""
+    i=0
+    for name in $log_names; do
+        i=$((i + 1))
+        [ "$i" = "$choice" ] && { selected="$name"; break; }
+    done
+    [ -z "$selected" ] && { log_warn "Invalid choice."; return; }
 
     local logfile=""
-    case "$choice" in
+    case "$selected" in
         apache-error)  logfile="${APACHE_LOG_DIR}/custom-stack-error.log" ;;
         apache-access) logfile="${APACHE_LOG_DIR}/custom-stack-access.log" ;;
         nginx-error)   logfile="${NGINX_LOG_DIR}/custom-stack-error.log" ;;
@@ -389,26 +402,37 @@ show_logs_menu() {
     esac
 
     if [ -z "$logfile" ] || [ ! -f "$logfile" ]; then
-        "$DIALOG_BIN" --title "Log" --msgbox "Log file not found:\n${logfile:-unknown}" 8 50 2>/dev/null
+        log_warn "Log file not found: ${logfile:-unknown}"
         return
     fi
 
-    local tmplog="/tmp/stack_dialog_logview"
-    tail -50 "$logfile" > "$tmplog" 2>/dev/null || echo "(empty or unreadable)" > "$tmplog"
-    "$DIALOG_BIN" --title "$choice — last 50 lines" \
-        --textbox "$tmplog" 24 80 2>/dev/null
-    rm -f "$tmplog"
+    echo ""
+    echo -e "${BOLD}── ${selected} — last 50 lines ──${NC}"
+    echo ""
+    tail -50 "$logfile" 2>/dev/null || echo "(empty or unreadable)"
+    echo ""
 }
 
+# ── DB Credentials ──────────────────────────────────────────────────────────
+
 show_db_credentials() {
+    _init_stack_paths
     if [ ! -f "$STACK_CREDS" ] || [ ! -s "$STACK_CREDS" ]; then
-        "$DIALOG_BIN" --title "DB Credentials" \
-            --msgbox "No credentials stored.\n\nThis can happen if:\n- Databases were installed before this feature\n- No databases were installed\n\nCheck manually:\n  MySQL/MariaDB: sudo mysql\n  PostgreSQL: sudo -u postgres psql" 14 55 2>/dev/null
+        echo ""
+        log_warn "No credentials stored."
+        echo "  This can happen if databases were installed before this feature"
+        echo "  or no databases were installed."
+        echo ""
+        echo "  Check manually:"
+        echo "    MySQL/MariaDB: sudo mysql"
+        echo "    PostgreSQL:    sudo -u postgres psql"
+        echo ""
         return
     fi
 
-    local cred_text="Stored Database Credentials\n"
-    cred_text="${cred_text}$(printf '=%.0s' {1..40})\n\n"
+    echo ""
+    echo -e "${BOLD}── DB Credentials ──${NC}"
+    echo ""
 
     while IFS='|' read -r service user password; do
         [ -z "$service" ] && continue
@@ -433,80 +457,87 @@ show_db_credentials() {
                 ;;
         esac
 
-        cred_text="${cred_text}  Service:  ${service}\n"
-        cred_text="${cred_text}  User:     ${user}\n"
-        cred_text="${cred_text}  Password: ${password}\n"
+        echo -e "  Service:  ${CYAN}${service}${NC}"
+        echo "  User:     ${user}"
+        echo "  Password: ${password}"
         if [ "$status" = "VALID" ]; then
-            cred_text="${cred_text}  Status:   [VALID]\n\n"
+            echo -e "  Status:   ${GREEN}[VALID]${NC}"
         else
-            cred_text="${cred_text}  Status:   [CHANGED externally]\n\n"
+            echo -e "  Status:   ${YELLOW}[CHANGED externally]${NC}"
         fi
+        echo ""
     done < "$STACK_CREDS"
 
-    cred_text="${cred_text}$(printf '-%.0s' {1..40})\n"
-    cred_text="${cred_text}If status shows CHANGED, the password\n"
-    cred_text="${cred_text}was modified outside this tool\n"
-    cred_text="${cred_text}(via phpMyAdmin, CLI, etc).\n\n"
-    cred_text="${cred_text}File: ${STACK_CREDS} (chmod 600)"
-
-    "$DIALOG_BIN" --title "DB Credentials" \
-        --msgbox "$cred_text" 26 55 2>/dev/null
+    echo "  If status shows CHANGED, the password was modified"
+    echo "  outside this tool (via phpMyAdmin, CLI, etc)."
+    echo -e "  File: ${CYAN}${STACK_CREDS}${NC} (chmod 600)"
+    echo ""
 }
 
+# ── Change DB Password ──────────────────────────────────────────────────────
+
 change_db_password() {
+    _init_stack_paths
     if [ ! -f "$STACK_CREDS" ] || [ ! -s "$STACK_CREDS" ]; then
-        "$DIALOG_BIN" --title "Change Password" \
-            --msgbox "No databases with stored credentials found." 7 50 2>/dev/null
+        log_warn "No databases with stored credentials found."
         return
     fi
 
-    local items=""
-    local tag_count=0
+    echo ""
+    echo -e "${BOLD}── Change DB Password ──${NC}"
+    echo "  Select database:"
+
+    local i=0
+    local svc_list=""
     while IFS='|' read -r service user password; do
         [ -z "$service" ] && continue
-        items="$items \"${service}\" \"User: ${user}\" off"
-        tag_count=$((tag_count + 1))
+        i=$((i + 1))
+        echo "  $i) ${service} (user: ${user})"
+        svc_list="${svc_list}${service}|${user}|${password}\n"
     done < "$STACK_CREDS"
+    echo "  0) Back"
+    echo ""
 
-    if [ "$tag_count" -eq 0 ]; then
-        "$DIALOG_BIN" --title "Change Password" \
-            --msgbox "No databases with stored credentials found." 7 50 2>/dev/null
+    if [ "$i" -eq 0 ]; then
+        log_warn "No databases with stored credentials found."
         return
     fi
 
-    local height=$((tag_count + 8))
-    local selected
-    selected=$(eval run_dialog --title \"Change DB Password\" \
-        --radiolist \"'Select database:'\" "$height" 55 "$tag_count" \
-        "$items") || return 0
+    local choice
+    read -p "  Choose: " choice
+    [ -z "$choice" ] || [ "$choice" = "0" ] && return
 
-    [ -z "$selected" ] && return 0
-
-    local new_pass=""
-    local method
-    method=$(run_dialog --title "New Password for ${selected}" \
-        --menu "How would you like to set the new password?" 12 55 2 \
-        "auto"   "Auto-generate secure password" \
-        "manual" "Enter password manually") || return 0
-
-    if [ "$method" = "auto" ]; then
-        new_pass=$(generate_password)
-    else
-        new_pass=$(run_dialog --title "New Password for ${selected}" \
-            --inputbox "Enter new password:" 8 55 "") || return 0
-        if [ -z "$new_pass" ]; then
-            "$DIALOG_BIN" --title "Error" --msgbox "Password cannot be empty." 7 40 2>/dev/null
-            return
-        fi
-    fi
-
-    local db_user=""
+    local selected="" db_user="" old_pass=""
+    local j=0
     while IFS='|' read -r service user password; do
-        if [ "$service" = "$selected" ]; then
+        [ -z "$service" ] && continue
+        j=$((j + 1))
+        if [ "$j" = "$choice" ]; then
+            selected="$service"
             db_user="$user"
+            old_pass="$password"
             break
         fi
     done < "$STACK_CREDS"
+
+    [ -z "$selected" ] && { log_warn "Invalid choice."; return; }
+
+    echo ""
+    echo "  1) Auto-generate secure password"
+    echo "  2) Enter password manually"
+    local method
+    read -p "  Choose [1]: " method
+
+    local new_pass=""
+    if [ "$method" = "2" ]; then
+        read -p "  Enter new password: " new_pass
+        if [ -z "$new_pass" ]; then
+            log_error "Password cannot be empty."
+            return
+        fi
+    else
+        new_pass=$(generate_password)
+    fi
 
     local success=false
     local error_msg=""
@@ -555,109 +586,134 @@ change_db_password() {
 
     if [ "$success" = true ]; then
         save_credential "$selected" "$db_user" "$new_pass"
-        "$DIALOG_BIN" --title "Password Changed" \
-            --msgbox "${selected} password updated successfully.\n\n  User:     ${db_user}\n  Password: ${new_pass}\n\nThis has been saved to the credentials store." 12 55 2>/dev/null
+        echo ""
+        log_success "${selected} password updated."
+        echo "  User:     ${db_user}"
+        echo "  Password: ${new_pass}"
+        echo ""
     else
-        "$DIALOG_BIN" --title "Error" \
-            --msgbox "Failed to change ${selected} password.\n\n${error_msg}" 12 60 2>/dev/null
+        log_error "Failed to change ${selected} password."
+        [ -n "$error_msg" ] && echo "  $error_msg"
+        echo ""
     fi
 }
 
+# ── Create DB User ──────────────────────────────────────────────────────────
+
 create_db_user() {
     local items=""
-    local tag_count=0
+    local i=0
+
+    echo ""
+    echo -e "${BOLD}── Create DB User ──${NC}"
+    echo "  Select database:"
+
     if [ "${HAS_MYSQL:-${SEL_MYSQL:-off}}" = "on" ]; then
-        items="$items MySQL 'MySQL Server' off"
-        tag_count=$((tag_count + 1))
+        i=$((i + 1)); echo "  $i) MySQL"
+        items="${items}MySQL\n"
     fi
     if [ "${HAS_MARIADB:-${SEL_MARIADB:-off}}" = "on" ]; then
-        items="$items MariaDB 'MariaDB Server' off"
-        tag_count=$((tag_count + 1))
+        i=$((i + 1)); echo "  $i) MariaDB"
+        items="${items}MariaDB\n"
     fi
     if [ "${HAS_POSTGRESQL:-${SEL_POSTGRESQL:-off}}" = "on" ]; then
-        items="$items PostgreSQL 'PostgreSQL Server' off"
-        tag_count=$((tag_count + 1))
+        i=$((i + 1)); echo "  $i) PostgreSQL"
+        items="${items}PostgreSQL\n"
     fi
     if [ "${HAS_MONGODB:-${SEL_MONGODB:-off}}" = "on" ]; then
-        items="$items MongoDB 'MongoDB Server' off"
-        tag_count=$((tag_count + 1))
+        i=$((i + 1)); echo "  $i) MongoDB"
+        items="${items}MongoDB\n"
     fi
+    echo "  0) Back"
+    echo ""
 
-    if [ "$tag_count" -eq 0 ]; then
-        "$DIALOG_BIN" --title "Create DB User" \
-            --msgbox "No databases installed." 7 40 2>/dev/null
+    if [ "$i" -eq 0 ]; then
+        log_warn "No databases installed."
         return
     fi
 
-    local height=$((tag_count + 8))
-    local selected
-    selected=$(eval run_dialog --title \"Create DB User\" \
-        --radiolist \"'Select database:'\" "$height" 55 "$tag_count" \
-        "$items") || return 0
+    local choice
+    read -p "  Choose: " choice
+    [ -z "$choice" ] || [ "$choice" = "0" ] && return
 
-    [ -z "$selected" ] && return 0
+    local selected=""
+    local j=0
+    while IFS= read -r db; do
+        [ -z "$db" ] && continue
+        j=$((j + 1))
+        [ "$j" = "$choice" ] && { selected="$db"; break; }
+    done < <(printf "$items")
+
+    [ -z "$selected" ] && { log_warn "Invalid choice."; return; }
 
     local new_user
-    new_user=$(run_dialog --title "Create User — ${selected}" \
-        --inputbox "Enter username:" 8 55 "") || return 0
+    read -p "  Enter username: " new_user
     if [ -z "$new_user" ]; then
-        "$DIALOG_BIN" --title "Error" --msgbox "Username cannot be empty." 7 40 2>/dev/null
+        log_error "Username cannot be empty."
         return
     fi
 
-    local new_pass=""
+    echo ""
+    echo "  1) Auto-generate secure password"
+    echo "  2) Enter password manually"
     local method
-    method=$(run_dialog --title "Password for ${new_user}" \
-        --menu "How would you like to set the password?" 12 55 2 \
-        "auto"   "Auto-generate secure password" \
-        "manual" "Enter password manually") || return 0
+    read -p "  Choose [1]: " method
 
-    if [ "$method" = "auto" ]; then
-        new_pass=$(generate_password)
-    else
-        new_pass=$(run_dialog --title "Password for ${new_user}" \
-            --inputbox "Enter password:" 8 55 "") || return 0
+    local new_pass=""
+    if [ "$method" = "2" ]; then
+        read -p "  Enter password: " new_pass
         if [ -z "$new_pass" ]; then
-            "$DIALOG_BIN" --title "Error" --msgbox "Password cannot be empty." 7 40 2>/dev/null
+            log_error "Password cannot be empty."
             return
         fi
+    else
+        new_pass=$(generate_password)
     fi
 
     local grant_db=""
     if [ "$selected" != "MongoDB" ]; then
-        local db_choice
-        db_choice=$(run_dialog --title "Grant Privileges" \
-            --menu "Grant this user access to:" 12 55 3 \
-            "all"      "All databases (full privileges)" \
-            "specific" "A specific database" \
-            "none"     "No grants (create user only)") || return 0
+        echo ""
+        echo "  Grant privileges:"
+        echo "  1) All databases (full privileges)"
+        echo "  2) A specific database"
+        echo "  3) No grants (create user only)"
+        local grant_choice
+        read -p "  Choose [3]: " grant_choice
 
-        if [ "$db_choice" = "specific" ]; then
-            grant_db=$(run_dialog --title "Database Name" \
-                --inputbox "Enter database name to grant access to:" 8 55 "") || return 0
-            if [ -z "$grant_db" ]; then
-                "$DIALOG_BIN" --title "Error" --msgbox "Database name cannot be empty." 7 45 2>/dev/null
-                return
-            fi
-        elif [ "$db_choice" = "all" ]; then
-            grant_db="*"
-        fi
+        case "$grant_choice" in
+            1) grant_db="*" ;;
+            2)
+                read -p "  Enter database name: " grant_db
+                if [ -z "$grant_db" ]; then
+                    log_error "Database name cannot be empty."
+                    return
+                fi
+                ;;
+        esac
     fi
 
     local mongo_db="admin"
     local mongo_role="readWrite"
     if [ "$selected" = "MongoDB" ]; then
-        mongo_db=$(run_dialog --title "MongoDB Database" \
-            --inputbox "Auth/target database:" 8 55 "admin") || return 0
+        read -p "  Auth/target database [admin]: " mongo_db
         [ -z "$mongo_db" ] && mongo_db="admin"
 
-        mongo_role=$(run_dialog --title "MongoDB Role" \
-            --menu "Select role for ${new_user}:" 14 55 5 \
-            "readWrite"     "Read and write to the database" \
-            "read"          "Read-only access" \
-            "dbAdmin"       "Database administration" \
-            "userAdmin"     "User administration" \
-            "root"          "Superuser (all privileges)") || return 0
+        echo ""
+        echo "  Select role:"
+        echo "  1) readWrite  — Read and write"
+        echo "  2) read       — Read-only"
+        echo "  3) dbAdmin    — Database admin"
+        echo "  4) userAdmin  — User admin"
+        echo "  5) root       — Superuser"
+        local role_choice
+        read -p "  Choose [1]: " role_choice
+        case "$role_choice" in
+            2) mongo_role="read" ;;
+            3) mongo_role="dbAdmin" ;;
+            4) mongo_role="userAdmin" ;;
+            5) mongo_role="root" ;;
+            *) mongo_role="readWrite" ;;
+        esac
     fi
 
     local success=false
@@ -735,115 +791,106 @@ create_db_user() {
     if [ "$success" = true ]; then
         save_credential "${selected}:${new_user}" "$new_user" "$new_pass"
 
-        local detail="User:     ${new_user}\n  Password: ${new_pass}"
+        echo ""
+        log_success "${selected} user created."
+        echo "  User:     ${new_user}"
+        echo "  Password: ${new_pass}"
         case "$selected" in
             MongoDB)
-                detail="${detail}\n  Database: ${mongo_db}\n  Role:     ${mongo_role}" ;;
+                echo "  Database: ${mongo_db}"
+                echo "  Role:     ${mongo_role}" ;;
             *)
                 if [ "$grant_db" = "*" ]; then
-                    detail="${detail}\n  Grants:   ALL PRIVILEGES (superuser)"
+                    echo "  Grants:   ALL PRIVILEGES (superuser)"
                 elif [ -n "$grant_db" ]; then
-                    detail="${detail}\n  Grants:   ALL on ${grant_db}"
+                    echo "  Grants:   ALL on ${grant_db}"
                 else
-                    detail="${detail}\n  Grants:   None (login only)"
+                    echo "  Grants:   None (login only)"
                 fi
                 ;;
         esac
-
-        "$DIALOG_BIN" --title "User Created" \
-            --msgbox "${selected} user created successfully.\n\n  ${detail}\n\nSaved to credentials store." 16 58 2>/dev/null
+        echo ""
     else
-        "$DIALOG_BIN" --title "Error" \
-            --msgbox "Failed to create ${selected} user.\n\n${error_msg}" 12 60 2>/dev/null
+        log_error "Failed to create ${selected} user."
+        [ -n "$error_msg" ] && echo "  $error_msg"
+        echo ""
     fi
 }
 
+# ── Remove Services ─────────────────────────────────────────────────────────
+
 remove_services() {
+    _init_stack_paths
     local webserver="${WEBSERVER:-$SEL_WEBSERVER}"
     local php_ver="${PHP_VER}"
 
-    local items=""
-    local tag_count=0
+    echo ""
+    echo -e "${BOLD}── Remove Services ──${NC}"
+    echo "  Select services to remove (y/N for each):"
+    echo ""
 
-    if [ -n "$webserver" ] && pkg_is_installed "$APACHE_PKG" 2>/dev/null && [ "$webserver" = "apache" ]; then
-        items="$items apache 'Apache Web Server' off"
-        tag_count=$((tag_count + 1))
-    fi
-    if [ -n "$webserver" ] && pkg_is_installed "nginx" 2>/dev/null && [ "$webserver" = "nginx" ]; then
-        items="$items nginx 'Nginx Web Server' off"
-        tag_count=$((tag_count + 1))
-    fi
+    local to_remove=""
 
+    if [ -n "$webserver" ] && [ "$webserver" = "apache" ]; then
+        local yn; read -p "  Remove Apache?     (y/N): " yn
+        [[ "$yn" =~ ^[Yy]$ ]] && to_remove="$to_remove apache"
+    fi
+    if [ -n "$webserver" ] && [ "$webserver" = "nginx" ]; then
+        local yn; read -p "  Remove Nginx?      (y/N): " yn
+        [[ "$yn" =~ ^[Yy]$ ]] && to_remove="$to_remove nginx"
+    fi
     if [ -n "$php_ver" ]; then
-        local php_check_pkg="php${php_ver}-fpm"
-        [ "$DISTRO" = "fedora" ] && php_check_pkg="php-fpm"
-        [ "$DISTRO" = "macos" ] && php_check_pkg="php"
-        if pkg_is_installed "$php_check_pkg" 2>/dev/null; then
-            items="$items php 'PHP ${php_ver} + all extensions' off"
-            tag_count=$((tag_count + 1))
-        fi
+        local yn; read -p "  Remove PHP ${php_ver}?    (y/N): " yn
+        [[ "$yn" =~ ^[Yy]$ ]] && to_remove="$to_remove php"
     fi
-
     if [ "${HAS_MYSQL:-${SEL_MYSQL:-off}}" = "on" ]; then
-        items="$items mysql 'MySQL Server' off"
-        tag_count=$((tag_count + 1))
+        local yn; read -p "  Remove MySQL?      (y/N): " yn
+        [[ "$yn" =~ ^[Yy]$ ]] && to_remove="$to_remove mysql"
     fi
     if [ "${HAS_MARIADB:-${SEL_MARIADB:-off}}" = "on" ]; then
-        items="$items mariadb 'MariaDB Server' off"
-        tag_count=$((tag_count + 1))
+        local yn; read -p "  Remove MariaDB?    (y/N): " yn
+        [[ "$yn" =~ ^[Yy]$ ]] && to_remove="$to_remove mariadb"
     fi
     if [ "${HAS_POSTGRESQL:-${SEL_POSTGRESQL:-off}}" = "on" ]; then
-        items="$items postgresql 'PostgreSQL Server' off"
-        tag_count=$((tag_count + 1))
+        local yn; read -p "  Remove PostgreSQL? (y/N): " yn
+        [[ "$yn" =~ ^[Yy]$ ]] && to_remove="$to_remove postgresql"
     fi
     if [ "${HAS_MONGODB:-${SEL_MONGODB:-off}}" = "on" ]; then
-        items="$items mongodb 'MongoDB Server' off"
-        tag_count=$((tag_count + 1))
+        local yn; read -p "  Remove MongoDB?    (y/N): " yn
+        [[ "$yn" =~ ^[Yy]$ ]] && to_remove="$to_remove mongodb"
     fi
     if [ "${HAS_PHPMYADMIN:-off}" = "on" ]; then
-        items="$items phpmyadmin 'phpMyAdmin' off"
-        tag_count=$((tag_count + 1))
+        local yn; read -p "  Remove phpMyAdmin? (y/N): " yn
+        [[ "$yn" =~ ^[Yy]$ ]] && to_remove="$to_remove phpmyadmin"
     fi
     if [ "${HAS_ADMINER:-off}" = "on" ]; then
-        items="$items adminer 'Adminer' off"
-        tag_count=$((tag_count + 1))
+        local yn; read -p "  Remove Adminer?    (y/N): " yn
+        [[ "$yn" =~ ^[Yy]$ ]] && to_remove="$to_remove adminer"
     fi
 
-    if [ "$tag_count" -eq 0 ]; then
-        "$DIALOG_BIN" --title "Remove Services" \
-            --msgbox "No removable services found." 7 40 2>/dev/null
+    if [ -z "$to_remove" ]; then
+        log_info "Nothing selected."
         return
     fi
 
-    local height=$((tag_count + 8))
-    [ "$height" -gt 22 ] && height=22
-    local selected
-    selected=$(eval run_dialog --title \"Remove Services\" \
-        --checklist \"'Select services to remove:\n(SPACE to toggle, ENTER to confirm)'\" "$height" 58 "$tag_count" \
-        "$items") || return 0
-
-    [ -z "$selected" ] && return 0
-
-    local clean_list
-    clean_list=$(echo "$selected" | sed 's/"//g' | tr ' ' ', ')
-    "$DIALOG_BIN" --title "Confirm Removal" \
-        --yesno "This will STOP and REMOVE the following services:\n\n  ${clean_list}\n\nDatabase data may be lost!\nAre you sure?" 12 58 2>/dev/null \
-        || return 0
+    echo ""
+    echo -e "  Will remove:${CYAN}${to_remove}${NC}"
+    local confirm
+    read -p "  Are you sure? (y/N): " confirm
+    [[ ! "$confirm" =~ ^[Yy]$ ]] && { log_info "Cancelled."; return; }
 
     local purge_data=false
     if [ "$DISTRO" != "macos" ]; then
-        "$DIALOG_BIN" --title "Remove Data?" \
-            --yesno "Also remove all configuration and data files?\n\n  Yes = purge (clean slate)\n  No  = remove packages only (data kept)" 10 55 2>/dev/null \
-            && purge_data=true
+        local pd
+        read -p "  Also purge data files? (y/N): " pd
+        [[ "$pd" =~ ^[Yy]$ ]] && purge_data=true
     fi
 
     [ "$purge_data" = true ] && export PURGE_MODE="purge"
 
+    echo ""
     local result_text=""
-    local raw_selected
-    raw_selected=$(echo "$selected" | sed 's/"//g')
-
-    for svc in $raw_selected; do
+    for svc in $to_remove; do
         case "$svc" in
             apache)
                 svc_stop "$APACHE_SVC"
@@ -945,86 +992,78 @@ remove_services() {
 
     [ -f "$STACK_CONFIG" ] && load_stack_config 2>/dev/null || true
 
-    "$DIALOG_BIN" --title "Removal Complete" \
-        --msgbox "The following services were removed:\n\n${result_text}\nConfig and credentials updated." 16 55 2>/dev/null
+    echo ""
+    echo -e "${BOLD}── Removal Complete ──${NC}"
+    echo -e "$result_text"
 }
+
+# ── Control Panel Main Menu ─────────────────────────────────────────────────
 
 control_panel() {
     local docroot="${DOCROOT:-$SEL_DOCROOT}"
     local port="${PORT:-$SEL_PORT}"
 
     while true; do
+        echo ""
+        echo -e "${BOLD}========================================${NC}"
+        echo -e "${BOLD}  Stack Control Panel (${DISTRO})${NC}"
+        echo -e "${BOLD}========================================${NC}"
+        echo ""
+        echo "   1) Open Site in Browser"
+        echo "   2) PHP Info Page"
+        echo "   3) File Explorer"
+        echo "   4) phpMyAdmin"
+        echo "   5) Adminer (DB Manager)"
+        echo "   6) Show DB Credentials"
+        echo "   7) Change DB Password"
+        echo "   8) Create DB User"
+        echo "   9) Service Status"
+        echo "  10) Restart All Services"
+        echo "  11) Remove Services"
+        echo "  12) View Logs"
+        echo "   0) Exit"
+        echo ""
+
         local choice
-        choice=$(run_dialog --title "Stack Control Panel (${DISTRO})" \
-            --menu "Select an action:" 26 60 13 \
-            "open-site"   "Open Site in Browser" \
-            "phpinfo"     "PHP Info Page" \
-            "files"       "File Explorer" \
-            "phpmyadmin"  "phpMyAdmin" \
-            "adminer"     "Adminer (DB Manager)" \
-            "db-creds"    "Show DB Credentials" \
-            "db-passwd"   "Change DB Password" \
-            "db-user"     "Create DB User" \
-            "status"      "Service Status" \
-            "restart"     "Restart All Services" \
-            "remove"      "Remove Services" \
-            "logs"        "View Logs" \
-            "exit"        "Exit Panel") || break
+        read -p "  Choose: " choice
 
         case "$choice" in
-            open-site)
+            1)
                 open_in_browser "http://localhost:${port}"
                 ;;
-            phpinfo)
+            2)
                 create_phpinfo_page
                 open_in_browser "http://localhost:${port}/info.php"
                 ;;
-            files)
+            3)
                 deploy_file_explorer
                 open_in_browser "http://localhost:${port}/explorer.php"
                 ;;
-            phpmyadmin)
+            4)
                 if [ "${HAS_PHPMYADMIN:-off}" != "on" ]; then
-                    "$DIALOG_BIN" --title "phpMyAdmin" \
-                        --yesno "phpMyAdmin is not installed.\nInstall it now?" 8 45 2>/dev/null \
-                        && install_phpmyadmin || continue
+                    local yn
+                    read -p "  phpMyAdmin not installed. Install now? (y/N): " yn
+                    [[ "$yn" =~ ^[Yy]$ ]] && install_phpmyadmin || continue
                 fi
                 open_in_browser "http://localhost:${port}/phpmyadmin"
                 ;;
-            adminer)
+            5)
                 if [ "${HAS_ADMINER:-off}" != "on" ] || [ ! -f "${docroot}/adminer.php" ]; then
                     install_adminer
                 fi
                 open_in_browser "http://localhost:${port}/adminer.php"
                 ;;
-            db-creds)
-                show_db_credentials
-                ;;
-            db-passwd)
-                change_db_password
-                ;;
-            db-user)
-                create_db_user
-                ;;
-            status)
-                show_service_status
-                ;;
-            restart)
-                panel_restart_services
-                ;;
-            remove)
-                remove_services
-                ;;
-            logs)
-                show_logs_menu
-                ;;
-            exit)
-                break
-                ;;
+            6)  show_db_credentials ;;
+            7)  change_db_password ;;
+            8)  create_db_user ;;
+            9)  show_service_status ;;
+            10) panel_restart_services ;;
+            11) remove_services ;;
+            12) show_logs_menu ;;
+            0)  break ;;
+            *)  log_warn "Invalid choice." ;;
         esac
     done
 
-    clear
     log_info "Control panel closed."
 }
-

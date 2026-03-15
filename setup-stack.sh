@@ -33,32 +33,6 @@ trap cleanup EXIT
 # Detect OS and set all platform variables
 detect_os
 
-# Root check (not needed on macOS with Homebrew)
-if [ "$DISTRO" != "macos" ]; then
-    if [ "$(id -u)" -ne 0 ]; then
-        log_error "This script must be run as root (use sudo)."
-        exit 1
-    fi
-fi
-
-# Detect dialog tool
-DIALOG_BIN=""
-if command -v dialog >/dev/null 2>&1; then
-    DIALOG_BIN="dialog"
-elif command -v whiptail >/dev/null 2>&1; then
-    DIALOG_BIN="whiptail"
-else
-    log_info "Installing dialog..."
-    pkg_install dialog
-    DIALOG_BIN="dialog"
-fi
-
-log_info "Using $DIALOG_BIN for interactive menus."
-
-# Initial package list update
-log_info "Updating package lists..."
-pkg_update
-
 # ── Selection variables ──────────────────────────────────────────────────────
 
 SEL_WEBSERVER=""
@@ -78,14 +52,42 @@ SEL_PORT="80"
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 main() {
-    # Check for --panel flag
+    # Check for --panel flag (skip root check and pkg update)
     if [ "${1:-}" = "--panel" ]; then
         load_stack_config
         control_panel
         exit 0
     fi
 
+    # Root check (not needed on macOS with Homebrew)
+    if [ "$DISTRO" != "macos" ]; then
+        if [ "$(id -u)" -ne 0 ]; then
+            log_error "This script must be run as root (use sudo)."
+            exit 1
+        fi
+    fi
+
+    # Package list update
+    if [ "$DISTRO" = "macos" ]; then
+        read -p "[?] Update Homebrew package list? This may take a minute. (y/N): " brew_update_choice
+        if [[ "$brew_update_choice" =~ ^[Yy]$ ]]; then
+            log_info "Updating Homebrew..."
+            pkg_update
+        else
+            log_info "Skipping Homebrew update."
+        fi
+    else
+        log_info "Updating package lists..."
+        pkg_update
+    fi
+
     # Interactive menus
+    echo ""
+    echo -e "${BOLD}========================================${NC}"
+    echo -e "${BOLD}  Stack Installation Wizard${NC}"
+    echo -e "${BOLD}========================================${NC}"
+    echo -e "  Configure your web development stack."
+    echo -e "  Press ${CYAN}ENTER${NC} to accept defaults shown in [brackets]."
     pick_webserver
     pick_sql_databases
     pick_mongodb
@@ -94,8 +96,6 @@ main() {
     pick_docroot
     pick_port
     confirm_selections
-
-    clear
 
     echo ""
     echo -e "${BOLD}========================================${NC}"

@@ -48,15 +48,61 @@ install_php() {
             php_ver=$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;' 2>/dev/null || echo "8.3")
             log_info "Installed PHP $php_ver"
 
+            # Configure PHP-FPM to use unix socket (Homebrew defaults to TCP 9000)
+            local fpm_conf="/opt/homebrew/etc/php/${php_ver}/php-fpm.d/www.conf"
+            if [ -f "$fpm_conf" ]; then
+                sed_i 's|^listen = 127\.0\.0\.1:9000|listen = /tmp/php-fpm.sock|' "$fpm_conf"
+                # Ensure socket permissions allow Apache to connect
+                sed_i 's|^;listen.owner = .*|listen.owner = '"$(whoami)"'|' "$fpm_conf"
+                sed_i 's|^;listen.group = .*|listen.group = staff|' "$fpm_conf"
+                sed_i 's|^;listen.mode = .*|listen.mode = 0660|' "$fpm_conf"
+                log_info "Configured PHP-FPM to use unix socket at /tmp/php-fpm.sock"
+            fi
+
             # Install PECL extensions if selected
             local raw_exts
             raw_exts=$(echo "$SEL_PHP_EXTS" | sed 's/"//g')
+
+            # Install brew dependencies needed by PECL extensions
+            local need_imagemagick=false
+            local need_igbinary=false
+            local need_yaml=false
+            local need_memcached=false
             for ext in $raw_exts; do
                 case "$ext" in
-                    php-redis|php-imagick|php-mongodb)
+                    pecl-imagick) need_imagemagick=true ;;
+                    pecl-igbinary|pecl-redis) need_igbinary=true ;;
+                    pecl-yaml) need_yaml=true ;;
+                    pecl-memcached) need_memcached=true ;;
+                esac
+            done
+            $need_imagemagick && { log_info "Installing ImageMagick (dependency)..."; pkg_install imagemagick; }
+            $need_yaml && { log_info "Installing libyaml (dependency)..."; pkg_install libyaml; }
+            $need_memcached && { log_info "Installing libmemcached (dependency)..."; pkg_install libmemcached; }
+
+            # Install igbinary first if needed (redis depends on it)
+            if $need_igbinary; then
+                log_info "Installing PECL extension: igbinary..."
+                if pecl list 2>/dev/null | grep -q igbinary; then
+                    log_success "igbinary already installed."
+                else
+                    printf "\n" | pecl install igbinary 2>/dev/null || log_warn "PECL extension igbinary failed, skipping."
+                fi
+            fi
+
+            for ext in $raw_exts; do
+                case "$ext" in
+                    pecl-igbinary) ;; # already installed above
+                    pecl-*)
                         local pecl_name
-                        pecl_name=$(echo "$ext" | sed 's/^php-//')
-                        pecl install "$pecl_name" 2>/dev/null || log_warn "PECL extension $pecl_name failed, skipping."
+                        pecl_name=$(echo "$ext" | sed 's/^pecl-//')
+                        if pecl list 2>/dev/null | grep -q "$pecl_name"; then
+                            log_success "${pecl_name} already installed."
+                        else
+                            log_info "Installing PECL extension: ${pecl_name}..."
+                            printf "\n\n\n\n\n\n\n" | pecl install "$pecl_name" 2>/dev/null \
+                                || log_warn "PECL extension $pecl_name failed, skipping."
+                        fi
                         ;;
                 esac
             done

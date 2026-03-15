@@ -1,8 +1,10 @@
 # Stack Installer
 
-Interactive LAMP/LEMP stack setup script with a post-installation control panel. Cross-platform TUI installer using `dialog`/`whiptail` menus.
+Interactive LAMP/LEMP stack setup script with a post-installation control panel. Simple inline terminal prompts — no full-screen TUI needed.
 
 **Supports:** Ubuntu/Debian, Fedora/RHEL/CentOS, macOS (Homebrew)
+
+![Control Panel](menu.png)
 
 ## What It Does
 

@@ -1,155 +1,152 @@
 #!/bin/bash
 # ==============================================================================
-# Interactive dialog menus for stack selection
+# Interactive inline menus for stack selection
+# Simple terminal prompts — no full-screen dialog needed
 # ==============================================================================
 
-run_dialog() {
-    local tmpfile="/tmp/stack_dialog_result"
-    "$DIALOG_BIN" "$@" 2>"$tmpfile"
-    local rc=$?
-    cat "$tmpfile"
-    return $rc
-}
-
 pick_webserver() {
-    local result
-    local apache_label="Apache HTTP Server"
-    [ "$DISTRO" = "fedora" ] && apache_label="Apache (httpd)"
-    result=$(run_dialog --title "Web Server" \
-        --radiolist "Select a web server:\n(Use SPACE to select, ENTER to confirm)" 12 50 2 \
-        "apache" "$apache_label" on \
-        "nginx"  "Nginx Web Server" off) || { log_error "Cancelled."; exit 1; }
-    SEL_WEBSERVER="$result"
+    echo ""
+    echo -e "${BOLD}── Web Server ──${NC}"
+    echo "  1) Apache"
+    echo "  2) Nginx"
+    echo ""
+    local choice
+    read -p "  Choose [1]: " choice
+    case "$choice" in
+        2) SEL_WEBSERVER="nginx" ;;
+        *) SEL_WEBSERVER="apache" ;;
+    esac
+    log_success "Web server: ${SEL_WEBSERVER}"
 }
 
 pick_sql_databases() {
-    local result
-    local items="\"mysql\" \"MySQL Server\" off \"mariadb\" \"MariaDB Server\" off"
-    items="$items \"postgresql\" \"PostgreSQL Server\" off"
+    echo ""
+    echo -e "${BOLD}── SQL Databases ──${NC}"
+    echo "  Select which databases to install (y/N for each):"
+    echo ""
 
-    result=$(eval run_dialog --title \"SQL Databases\" \
-        --checklist \"'Select SQL databases to install:\n(SPACE to toggle, ENTER to confirm)'\" 14 55 3 \
-        "$items") || { log_warn "No SQL database selected."; return 0; }
+    local yn
+    read -p "  MySQL?      (y/N): " yn
+    [[ "$yn" =~ ^[Yy]$ ]] && SEL_MYSQL="on"
 
-    case "$result" in *mysql*)      SEL_MYSQL="on" ;; esac
-    case "$result" in *mariadb*)    SEL_MARIADB="on" ;; esac
-    case "$result" in *postgresql*) SEL_POSTGRESQL="on" ;; esac
+    read -p "  MariaDB?    (y/N): " yn
+    [[ "$yn" =~ ^[Yy]$ ]] && SEL_MARIADB="on"
+
+    read -p "  PostgreSQL? (y/N): " yn
+    [[ "$yn" =~ ^[Yy]$ ]] && SEL_POSTGRESQL="on"
+
+    local db_list=""
+    [ "$SEL_MYSQL" = "on" ] && db_list="${db_list}MySQL "
+    [ "$SEL_MARIADB" = "on" ] && db_list="${db_list}MariaDB "
+    [ "$SEL_POSTGRESQL" = "on" ] && db_list="${db_list}PostgreSQL "
+    [ -z "$db_list" ] && db_list="None"
+    log_success "SQL databases: ${db_list}"
 }
 
 pick_mongodb() {
-    if "$DIALOG_BIN" --title "NoSQL Database" \
-        --yesno "Install MongoDB?" 7 40 2>/dev/null; then
+    echo ""
+    echo -e "${BOLD}── NoSQL Database ──${NC}"
+    local yn
+    read -p "  Install MongoDB? (y/N): " yn
+    if [[ "$yn" =~ ^[Yy]$ ]]; then
         SEL_MONGODB="on"
+        log_success "MongoDB: yes"
+    else
+        log_success "MongoDB: no"
     fi
 }
 
 pick_php_extensions() {
-    local items=""
+    echo ""
+    echo -e "${BOLD}── PHP Extensions ──${NC}"
+
+    local ext_names=""
 
     if [ "$DISTRO" = "macos" ]; then
-        items="$items php-redis      'Redis extension'    on"
-        items="$items php-imagick    'ImageMagick'        on"
-        if [ "$SEL_MONGODB" = "on" ]; then
-            items="$items php-mongodb 'MongoDB driver' on"
-        fi
-        local item_count
-        item_count=$(echo "$items" | xargs -n3 2>/dev/null | wc -l | tr -d ' ')
-        if [ "$item_count" -eq 0 ]; then
-            log_info "PHP on macOS includes most extensions by default."
-            SEL_PHP_EXTS=""
-            return
-        fi
+        # macOS: Homebrew PHP includes most core extensions (curl, gd, mbstring, xml, etc.)
+        # These are PECL extensions that need separate install
+        ext_names="pecl-redis pecl-imagick pecl-xdebug pecl-memcached pecl-igbinary pecl-yaml pecl-apcu"
+        [ "$SEL_MONGODB" = "on" ] && ext_names="$ext_names pecl-mongodb"
     else
-        items="$items php-cli        'PHP CLI'           on"
-        items="$items php-fpm        'FastCGI Process Manager' on"
-        items="$items php-common     'Common files'      on"
-        items="$items php-curl       'cURL support'      on"
-        items="$items php-gd         'GD graphics'       on"
-        items="$items php-mbstring   'Multibyte strings'  on"
-        items="$items php-xml        'XML support'       on"
-        items="$items php-zip        'ZIP support'       on"
-        items="$items php-intl       'Internationalization' on"
-        items="$items php-bcmath     'BC Math'           on"
-        items="$items php-soap       'SOAP support'      on"
-        items="$items php-redis      'Redis extension'   on"
-        items="$items php-imagick    'ImageMagick'       on"
-        items="$items php-sqlite3    'SQLite3 support'   on"
-        items="$items php-tokenizer  'Tokenizer'         on"
-        items="$items php-fileinfo   'File info'         on"
-        items="$items php-opcache    'OPcache'           on"
-        items="$items php-readline   'Readline'          on"
-
-        if [ "$SEL_MYSQL" = "on" ] || [ "$SEL_MARIADB" = "on" ]; then
-            items="$items php-mysql 'MySQL/MariaDB driver' on"
-        fi
-        if [ "$SEL_POSTGRESQL" = "on" ]; then
-            items="$items php-pgsql 'PostgreSQL driver' on"
-        fi
-        if [ "$SEL_MONGODB" = "on" ]; then
-            items="$items php-mongodb 'MongoDB driver' on"
-        fi
+        # Linux: core extensions (installed via apt/dnf with php version prefix)
+        ext_names="php-cli php-fpm php-common php-curl php-gd php-mbstring php-xml php-zip php-intl php-bcmath php-soap php-redis php-imagick php-sqlite3 php-tokenizer php-fileinfo php-opcache php-readline php-bz2 php-gmp php-ldap php-imap php-memcached php-apcu php-xdebug php-yaml php-igbinary php-uuid php-raphf"
+        [ "$SEL_MYSQL" = "on" ] || [ "$SEL_MARIADB" = "on" ] && ext_names="$ext_names php-mysql"
+        [ "$SEL_POSTGRESQL" = "on" ] && ext_names="$ext_names php-pgsql"
+        [ "$SEL_MONGODB" = "on" ] && ext_names="$ext_names php-mongodb"
     fi
 
-    local item_count
-    item_count=$(echo "$items" | xargs -n3 | wc -l | tr -d ' ')
+    echo "  Default extensions:"
+    local i=0
+    for ext in $ext_names; do
+        i=$((i + 1))
+        echo "    ${ext}"
+    done
+    echo ""
+    echo "  Total: ${i} extensions"
+    echo ""
 
-    local height=$((item_count + 8))
-    [ "$height" -gt 30 ] && height=30
+    local customize
+    read -p "  Install all defaults? (Y/n): " customize
+    if [[ "$customize" =~ ^[Nn]$ ]]; then
+        echo ""
+        echo "  Select extensions (y/N for each):"
+        local selected=""
+        for ext in $ext_names; do
+            local yn
+            read -p "    ${ext}? (y/N): " yn
+            [[ "$yn" =~ ^[Yy]$ ]] && selected="${selected} ${ext}"
+        done
+        SEL_PHP_EXTS="$selected"
+    else
+        SEL_PHP_EXTS="$ext_names"
+    fi
 
-    local result
-    result=$(eval run_dialog --title \"PHP Extensions\" \
-        --checklist \"'Select PHP extensions to install:'\" "$height" 60 "$item_count" \
-        "$items") || { log_error "Cancelled."; exit 1; }
-
-    SEL_PHP_EXTS="$result"
+    local count
+    count=$(echo "$SEL_PHP_EXTS" | wc -w | tr -d ' ')
+    log_success "PHP extensions: ${count} selected"
 }
 
 pick_php_settings() {
-    local tmpfile="/tmp/stack_dialog_result"
+    echo ""
+    echo -e "${BOLD}── PHP Settings ──${NC}"
+    echo "  Press ENTER to keep defaults shown in [brackets]."
+    echo ""
 
-    if [ "$DIALOG_BIN" = "dialog" ]; then
-        dialog --title "PHP Settings" \
-            --form "Configure PHP ini values:" 15 60 5 \
-            "upload_max_filesize:" 1 1 "$SEL_UPLOAD_MAX"     1 22 10 0 \
-            "post_max_size:"      2 1 "$SEL_POST_MAX"        2 22 10 0 \
-            "memory_limit:"       3 1 "$SEL_MEMORY_LIMIT"    3 22 10 0 \
-            "max_execution_time:" 4 1 "$SEL_MAX_EXEC_TIME"   4 22 10 0 \
-            "max_input_vars:"     5 1 "$SEL_MAX_INPUT_VARS"  5 22 10 0 \
-            2>"$tmpfile" || { log_error "Cancelled."; exit 1; }
+    local val
+    read -p "  upload_max_filesize [${SEL_UPLOAD_MAX}]: " val
+    [ -n "$val" ] && SEL_UPLOAD_MAX="$val"
 
-        local line_num=0
-        while IFS= read -r line; do
-            line_num=$((line_num + 1))
-            case $line_num in
-                1) [ -n "$line" ] && SEL_UPLOAD_MAX="$line" ;;
-                2) [ -n "$line" ] && SEL_POST_MAX="$line" ;;
-                3) [ -n "$line" ] && SEL_MEMORY_LIMIT="$line" ;;
-                4) [ -n "$line" ] && SEL_MAX_EXEC_TIME="$line" ;;
-                5) [ -n "$line" ] && SEL_MAX_INPUT_VARS="$line" ;;
-            esac
-        done < "$tmpfile"
-    else
-        local val
-        val=$(run_dialog --title "PHP Settings" --inputbox "upload_max_filesize:" 8 50 "$SEL_UPLOAD_MAX") && SEL_UPLOAD_MAX="$val"
-        val=$(run_dialog --title "PHP Settings" --inputbox "post_max_size:" 8 50 "$SEL_POST_MAX") && SEL_POST_MAX="$val"
-        val=$(run_dialog --title "PHP Settings" --inputbox "memory_limit:" 8 50 "$SEL_MEMORY_LIMIT") && SEL_MEMORY_LIMIT="$val"
-        val=$(run_dialog --title "PHP Settings" --inputbox "max_execution_time:" 8 50 "$SEL_MAX_EXEC_TIME") && SEL_MAX_EXEC_TIME="$val"
-        val=$(run_dialog --title "PHP Settings" --inputbox "max_input_vars:" 8 50 "$SEL_MAX_INPUT_VARS") && SEL_MAX_INPUT_VARS="$val"
-    fi
+    read -p "  post_max_size       [${SEL_POST_MAX}]: " val
+    [ -n "$val" ] && SEL_POST_MAX="$val"
+
+    read -p "  memory_limit        [${SEL_MEMORY_LIMIT}]: " val
+    [ -n "$val" ] && SEL_MEMORY_LIMIT="$val"
+
+    read -p "  max_execution_time  [${SEL_MAX_EXEC_TIME}]: " val
+    [ -n "$val" ] && SEL_MAX_EXEC_TIME="$val"
+
+    read -p "  max_input_vars      [${SEL_MAX_INPUT_VARS}]: " val
+    [ -n "$val" ] && SEL_MAX_INPUT_VARS="$val"
+
+    log_success "PHP settings configured"
 }
 
 pick_docroot() {
-    local result
-    result=$(run_dialog --title "Document Root" \
-        --inputbox "Enter the document root path:" 8 60 "$SEL_DOCROOT") || { log_error "Cancelled."; exit 1; }
-    [ -n "$result" ] && SEL_DOCROOT="$result"
+    echo ""
+    echo -e "${BOLD}── Document Root ──${NC}"
+    local val
+    read -p "  Path [${SEL_DOCROOT}]: " val
+    [ -n "$val" ] && SEL_DOCROOT="$val"
+    log_success "Document root: ${SEL_DOCROOT}"
 }
 
 pick_port() {
-    local result
-    result=$(run_dialog --title "Server Port" \
-        --inputbox "Enter the port number:" 8 50 "$SEL_PORT") || { log_error "Cancelled."; exit 1; }
-    [ -n "$result" ] && SEL_PORT="$result"
+    echo ""
+    echo -e "${BOLD}── Server Port ──${NC}"
+    local val
+    read -p "  Port [${SEL_PORT}]: " val
+    [ -n "$val" ] && SEL_PORT="$val"
+    log_success "Port: ${SEL_PORT}"
 }
 
 confirm_selections() {
@@ -160,27 +157,34 @@ confirm_selections() {
     [ "$SEL_MONGODB" = "on" ] && db_list="${db_list}MongoDB "
     [ -z "$db_list" ] && db_list="None"
 
-    local ext_display
-    ext_display=$(echo "$SEL_PHP_EXTS" | sed 's/"//g' | tr ' ' '\n' | sort | tr '\n' ' ')
+    local ext_count
+    ext_count=$(echo "$SEL_PHP_EXTS" | wc -w | tr -d ' ')
 
-    local summary="
-Platform:           ${DISTRO}
-Web Server:         ${SEL_WEBSERVER}
-Databases:          ${db_list}
-PHP Extensions:     ${ext_display}
+    echo ""
+    echo -e "${BOLD}========================================${NC}"
+    echo -e "${BOLD}  Review Your Selections${NC}"
+    echo -e "${BOLD}========================================${NC}"
+    echo ""
+    echo -e "  Platform:           ${CYAN}${DISTRO}${NC}"
+    echo -e "  Web Server:         ${CYAN}${SEL_WEBSERVER}${NC}"
+    echo -e "  Databases:          ${CYAN}${db_list}${NC}"
+    echo -e "  PHP Extensions:     ${CYAN}${ext_count} selected${NC}"
+    echo ""
+    echo -e "  ${BOLD}PHP Settings:${NC}"
+    echo "    upload_max_filesize = $SEL_UPLOAD_MAX"
+    echo "    post_max_size       = $SEL_POST_MAX"
+    echo "    memory_limit        = $SEL_MEMORY_LIMIT"
+    echo "    max_execution_time  = $SEL_MAX_EXEC_TIME"
+    echo "    max_input_vars      = $SEL_MAX_INPUT_VARS"
+    echo ""
+    echo -e "  Document Root:      ${CYAN}$SEL_DOCROOT${NC}"
+    echo -e "  Port:               ${CYAN}$SEL_PORT${NC}"
+    echo ""
 
-PHP Settings:
-  upload_max_filesize = $SEL_UPLOAD_MAX
-  post_max_size       = $SEL_POST_MAX
-  memory_limit        = $SEL_MEMORY_LIMIT
-  max_execution_time  = $SEL_MAX_EXEC_TIME
-  max_input_vars      = $SEL_MAX_INPUT_VARS
-
-Document Root:      $SEL_DOCROOT
-Port:               $SEL_PORT
-"
-
-    "$DIALOG_BIN" --title "Confirm Installation" \
-        --yesno "Review your selections:\n$summary\nProceed with installation?" 28 70 2>/dev/null \
-        || { log_error "Installation cancelled."; exit 1; }
+    local yn
+    read -p "  Proceed with installation? (Y/n): " yn
+    if [[ "$yn" =~ ^[Nn]$ ]]; then
+        log_error "Installation cancelled."
+        exit 1
+    fi
 }

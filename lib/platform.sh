@@ -140,7 +140,7 @@ pkg_update() {
     case "$PKG_MGR" in
         apt)  apt-get update -y -qq ;;
         dnf)  dnf check-update -y -q 2>/dev/null || true ;;
-        brew) brew update --quiet ;;
+        brew) brew update ;;
     esac
 }
 
