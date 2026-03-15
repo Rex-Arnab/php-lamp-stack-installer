@@ -89,8 +89,7 @@ main() {
     echo -e "  Configure your web development stack."
     echo -e "  Press ${CYAN}ENTER${NC} to accept defaults shown in [brackets]."
     pick_webserver
-    pick_sql_databases
-    pick_mongodb
+    pick_databases
     pick_php_extensions
     pick_php_settings
     pick_docroot

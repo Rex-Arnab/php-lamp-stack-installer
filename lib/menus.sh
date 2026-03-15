@@ -19,41 +19,31 @@ pick_webserver() {
     log_success "Web server: ${SEL_WEBSERVER}"
 }
 
-pick_sql_databases() {
+pick_databases() {
     echo ""
-    echo -e "${BOLD}── SQL Databases ──${NC}"
-    echo "  Select which databases to install (y/N for each):"
+    echo -e "${BOLD}── Database ──${NC}"
+    echo "  1) MySQL"
+    echo "  2) MariaDB"
+    echo "  3) PostgreSQL"
+    echo "  4) MongoDB"
+    echo "  5) None"
     echo ""
+    local choice
+    read -p "  Choose [5]: " choice
+    case "$choice" in
+        1) SEL_MYSQL="on" ;;
+        2) SEL_MARIADB="on" ;;
+        3) SEL_POSTGRESQL="on" ;;
+        4) SEL_MONGODB="on" ;;
+        *) ;;
+    esac
 
-    local yn
-    read -p "  MySQL?      (y/N): " yn
-    [[ "$yn" =~ ^[Yy]$ ]] && SEL_MYSQL="on"
-
-    read -p "  MariaDB?    (y/N): " yn
-    [[ "$yn" =~ ^[Yy]$ ]] && SEL_MARIADB="on"
-
-    read -p "  PostgreSQL? (y/N): " yn
-    [[ "$yn" =~ ^[Yy]$ ]] && SEL_POSTGRESQL="on"
-
-    local db_list=""
-    [ "$SEL_MYSQL" = "on" ] && db_list="${db_list}MySQL "
-    [ "$SEL_MARIADB" = "on" ] && db_list="${db_list}MariaDB "
-    [ "$SEL_POSTGRESQL" = "on" ] && db_list="${db_list}PostgreSQL "
-    [ -z "$db_list" ] && db_list="None"
-    log_success "SQL databases: ${db_list}"
-}
-
-pick_mongodb() {
-    echo ""
-    echo -e "${BOLD}── NoSQL Database ──${NC}"
-    local yn
-    read -p "  Install MongoDB? (y/N): " yn
-    if [[ "$yn" =~ ^[Yy]$ ]]; then
-        SEL_MONGODB="on"
-        log_success "MongoDB: yes"
-    else
-        log_success "MongoDB: no"
-    fi
+    local db_name="None"
+    [ "$SEL_MYSQL" = "on" ] && db_name="MySQL"
+    [ "$SEL_MARIADB" = "on" ] && db_name="MariaDB"
+    [ "$SEL_POSTGRESQL" = "on" ] && db_name="PostgreSQL"
+    [ "$SEL_MONGODB" = "on" ] && db_name="MongoDB"
+    log_success "Database: ${db_name}"
 }
 
 pick_php_extensions() {
@@ -150,12 +140,11 @@ pick_port() {
 }
 
 confirm_selections() {
-    local db_list=""
-    [ "$SEL_MYSQL" = "on" ] && db_list="${db_list}MySQL "
-    [ "$SEL_MARIADB" = "on" ] && db_list="${db_list}MariaDB "
-    [ "$SEL_POSTGRESQL" = "on" ] && db_list="${db_list}PostgreSQL "
-    [ "$SEL_MONGODB" = "on" ] && db_list="${db_list}MongoDB "
-    [ -z "$db_list" ] && db_list="None"
+    local db_list="None"
+    [ "$SEL_MYSQL" = "on" ] && db_list="MySQL"
+    [ "$SEL_MARIADB" = "on" ] && db_list="MariaDB"
+    [ "$SEL_POSTGRESQL" = "on" ] && db_list="PostgreSQL"
+    [ "$SEL_MONGODB" = "on" ] && db_list="MongoDB"
 
     local ext_count
     ext_count=$(echo "$SEL_PHP_EXTS" | wc -w | tr -d ' ')
@@ -167,7 +156,7 @@ confirm_selections() {
     echo ""
     echo -e "  Platform:           ${CYAN}${DISTRO}${NC}"
     echo -e "  Web Server:         ${CYAN}${SEL_WEBSERVER}${NC}"
-    echo -e "  Databases:          ${CYAN}${db_list}${NC}"
+    echo -e "  Database:           ${CYAN}${db_list}${NC}"
     echo -e "  PHP Extensions:     ${CYAN}${ext_count} selected${NC}"
     echo ""
     echo -e "  ${BOLD}PHP Settings:${NC}"
