@@ -14,8 +14,9 @@ install_php() {
             add-apt-repository -y ppa:ondrej/php
             pkg_update
 
-            php_ver=$(apt-cache showpkg php-fpm 2>/dev/null | grep -oP 'php\K[0-9]+\.[0-9]+' | sort -V | tail -1)
-            [ -z "$php_ver" ] && php_ver="8.3"
+            # Find the latest PHP version that has actual installable packages
+            php_ver=$(apt-cache search '^php[0-9]+\.[0-9]+-fpm$' 2>/dev/null | grep -o 'php[0-9]*\.[0-9]*' | sed 's/^php//' | sort -V | tail -1)
+            [ -z "$php_ver" ] && php_ver="8.4"
             log_info "Installing PHP $php_ver..."
 
             local exts_to_install=""
@@ -330,9 +331,13 @@ install_mysql() {
     log_success "MySQL installed."
 
     if [ "$DISTRO" != "macos" ]; then
-        "$DIALOG_BIN" --title "MySQL Security" \
-            --yesno "Run mysql_secure_installation now?\n(Recommended for production servers)\n\nNote: root password was auto-set." 10 55 2>/dev/null \
-            && mysql_secure_installation || log_warn "Skipped mysql_secure_installation."
+        local run_secure
+        read -p "  Run mysql_secure_installation? (Recommended for production) (y/N): " run_secure
+        if [[ "$run_secure" =~ ^[Yy]$ ]]; then
+            mysql_secure_installation || log_warn "mysql_secure_installation failed."
+        else
+            log_warn "Skipped mysql_secure_installation."
+        fi
     fi
 }
 
@@ -357,9 +362,13 @@ install_mariadb() {
     log_success "MariaDB installed."
 
     if [ "$DISTRO" != "macos" ]; then
-        "$DIALOG_BIN" --title "MariaDB Security" \
-            --yesno "Run mariadb-secure-installation now?\n(Recommended for production servers)\n\nNote: root password was auto-set." 10 55 2>/dev/null \
-            && mariadb-secure-installation || log_warn "Skipped mariadb-secure-installation."
+        local run_secure
+        read -p "  Run mariadb-secure-installation? (Recommended for production) (y/N): " run_secure
+        if [[ "$run_secure" =~ ^[Yy]$ ]]; then
+            mariadb-secure-installation || log_warn "mariadb-secure-installation failed."
+        else
+            log_warn "Skipped mariadb-secure-installation."
+        fi
     fi
 }
 
