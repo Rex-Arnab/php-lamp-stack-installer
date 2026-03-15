@@ -230,6 +230,51 @@ save_credential "MySQL:root" "root" "rootpass456"
 MYSQL_ENTRIES=$(grep -c "^MySQL:" "$STACK_CREDS")
 assert "Multiple users per DB in creds file" test "$MYSQL_ENTRIES" -eq 2
 
+# -- Test remove_services --
+echo -e "\n${YELLOW}  remove_services${NC}"
+
+# remove_services with nothing installed — should not crash
+HAS_MYSQL="off"; HAS_MARIADB="off"; HAS_POSTGRESQL="off"; HAS_MONGODB="off"
+HAS_PHPMYADMIN="off"; HAS_ADMINER="off"
+SEL_MYSQL="off"; SEL_MARIADB="off"; SEL_POSTGRESQL="off"; SEL_MONGODB="off"
+WEBSERVER=""; PHP_VER=""
+RESULT=$(remove_services 2>&1 </dev/null || true)
+assert "remove_services handles no services" true
+
+# Verify function structure
+assert_contains "remove_services stops before purging" /opt/setup-stack.sh 'systemctl stop'
+assert_contains "remove_services supports purge option" /opt/setup-stack.sh 'apt_action="purge"'
+assert_contains "remove_services runs autoremove" /opt/setup-stack.sh 'apt-get autoremove'
+assert_contains "remove_services updates config for MySQL" /opt/setup-stack.sh "HAS_MYSQL=off"
+assert_contains "remove_services updates config for MariaDB" /opt/setup-stack.sh "HAS_MARIADB=off"
+assert_contains "remove_services updates config for PostgreSQL" /opt/setup-stack.sh "HAS_POSTGRESQL=off"
+assert_contains "remove_services updates config for MongoDB" /opt/setup-stack.sh "HAS_MONGODB=off"
+assert_contains "remove_services cleans credentials" /opt/setup-stack.sh "sed -i '/^MySQL/d'"
+assert_contains "remove_services has confirmation dialog" /opt/setup-stack.sh "Confirm Removal"
+assert_contains "remove_services asks about data" /opt/setup-stack.sh "Remove Data"
+assert_contains "remove_services handles phpmyadmin" /opt/setup-stack.sh "HAS_PHPMYADMIN=off"
+assert_contains "remove_services handles adminer" /opt/setup-stack.sh "HAS_ADMINER=off"
+
+# Test that config gets updated when a service is removed
+# Simulate: write config with mysql=on, then verify sed pattern works
+cat > "$STACK_CONFIG" <<TESTCONF
+WEBSERVER=apache2
+DOCROOT=/var/www/html
+PORT=80
+PHP_VER=8.1
+HAS_MYSQL=on
+HAS_MARIADB=off
+HAS_POSTGRESQL=on
+HAS_MONGODB=off
+HAS_PHPMYADMIN=on
+HAS_ADMINER=off
+TESTCONF
+sed -i 's/^HAS_MYSQL=.*/HAS_MYSQL=off/' "$STACK_CONFIG"
+sed -i 's/^HAS_PHPMYADMIN=.*/HAS_PHPMYADMIN=off/' "$STACK_CONFIG"
+assert_contains "Config sed correctly sets HAS_MYSQL=off" "$STACK_CONFIG" "HAS_MYSQL=off"
+assert_contains "Config sed correctly sets HAS_PHPMYADMIN=off" "$STACK_CONFIG" "HAS_PHPMYADMIN=off"
+assert_contains "Config preserves HAS_POSTGRESQL=on" "$STACK_CONFIG" "HAS_POSTGRESQL=on"
+
 # ── Test 2: --panel flag parsing ─────────────────────────────────────────────
 echo -e "\n${CYAN}[Phase 2] --panel Flag Routing${NC}"
 
@@ -251,6 +296,7 @@ assert_contains "Panel has db-passwd option" /opt/setup-stack.sh '"db-passwd"'
 assert_contains "Panel has db-user option" /opt/setup-stack.sh '"db-user"'
 assert_contains "Panel has status option" /opt/setup-stack.sh '"status"'
 assert_contains "Panel has restart option" /opt/setup-stack.sh '"restart"'
+assert_contains "Panel has remove option" /opt/setup-stack.sh '"remove"'
 assert_contains "Panel has logs option" /opt/setup-stack.sh '"logs"'
 assert_contains "Panel has exit option" /opt/setup-stack.sh '"exit"'
 

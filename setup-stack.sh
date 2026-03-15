@@ -1274,6 +1274,179 @@ create_db_user() {
     fi
 }
 
+remove_services() {
+    local webserver="${WEBSERVER:-$SEL_WEBSERVER}"
+    local php_ver="${PHP_VER}"
+
+    # Build checklist of installed services
+    local items=""
+    local tag_count=0
+
+    if [ -n "$webserver" ] && dpkg -l "$webserver" >/dev/null 2>&1; then
+        local ws_label="Apache2"
+        [ "$webserver" = "nginx" ] && ws_label="Nginx"
+        items="$items ${webserver} '${ws_label} Web Server' off"
+        tag_count=$((tag_count + 1))
+    fi
+
+    if [ -n "$php_ver" ] && dpkg -l "php${php_ver}-fpm" >/dev/null 2>&1; then
+        items="$items php 'PHP ${php_ver} + all extensions' off"
+        tag_count=$((tag_count + 1))
+    fi
+
+    if [ "${HAS_MYSQL:-${SEL_MYSQL:-off}}" = "on" ]; then
+        items="$items mysql 'MySQL Server' off"
+        tag_count=$((tag_count + 1))
+    fi
+    if [ "${HAS_MARIADB:-${SEL_MARIADB:-off}}" = "on" ]; then
+        items="$items mariadb 'MariaDB Server' off"
+        tag_count=$((tag_count + 1))
+    fi
+    if [ "${HAS_POSTGRESQL:-${SEL_POSTGRESQL:-off}}" = "on" ]; then
+        items="$items postgresql 'PostgreSQL Server' off"
+        tag_count=$((tag_count + 1))
+    fi
+    if [ "${HAS_MONGODB:-${SEL_MONGODB:-off}}" = "on" ]; then
+        items="$items mongodb 'MongoDB Server' off"
+        tag_count=$((tag_count + 1))
+    fi
+    if [ "${HAS_PHPMYADMIN:-off}" = "on" ]; then
+        items="$items phpmyadmin 'phpMyAdmin' off"
+        tag_count=$((tag_count + 1))
+    fi
+    if [ "${HAS_ADMINER:-off}" = "on" ]; then
+        items="$items adminer 'Adminer' off"
+        tag_count=$((tag_count + 1))
+    fi
+
+    if [ "$tag_count" -eq 0 ]; then
+        "$DIALOG_BIN" --title "Remove Services" \
+            --msgbox "No removable services found." 7 40 2>/dev/null
+        return
+    fi
+
+    local height=$((tag_count + 8))
+    [ "$height" -gt 22 ] && height=22
+    local selected
+    selected=$(eval run_dialog --title \"Remove Services\" \
+        --checklist \"'Select services to remove:\n(SPACE to toggle, ENTER to confirm)'\" "$height" 58 "$tag_count" \
+        "$items") || return 0
+
+    [ -z "$selected" ] && return 0
+
+    # Confirmation
+    local clean_list
+    clean_list=$(echo "$selected" | sed 's/"//g' | tr ' ' ', ')
+    "$DIALOG_BIN" --title "Confirm Removal" \
+        --yesno "This will STOP and PURGE the following services:\n\n  ${clean_list}\n\nDatabase data may be lost!\nAre you sure?" 12 58 2>/dev/null \
+        || return 0
+
+    # Ask about data
+    local purge_data=false
+    "$DIALOG_BIN" --title "Remove Data?" \
+        --yesno "Also remove all configuration and data files?\n\n  Yes = purge (clean slate)\n  No  = remove packages only (data kept)" 10 55 2>/dev/null \
+        && purge_data=true
+
+    local apt_action="remove"
+    [ "$purge_data" = true ] && apt_action="purge"
+
+    local result_text=""
+    local raw_selected
+    raw_selected=$(echo "$selected" | sed 's/"//g')
+
+    for svc in $raw_selected; do
+        case "$svc" in
+            apache2)
+                systemctl stop apache2 2>/dev/null || true
+                apt-get "$apt_action" -y -qq apache2 libapache2-mod-fcgid 2>/dev/null
+                result_text="${result_text}  Apache2: removed\n"
+                if [ -f "$STACK_CONFIG" ]; then
+                    sed -i 's/^WEBSERVER=.*/WEBSERVER=/' "$STACK_CONFIG"
+                fi
+                ;;
+            nginx)
+                systemctl stop nginx 2>/dev/null || true
+                apt-get "$apt_action" -y -qq nginx 2>/dev/null
+                result_text="${result_text}  Nginx: removed\n"
+                if [ -f "$STACK_CONFIG" ]; then
+                    sed -i 's/^WEBSERVER=.*/WEBSERVER=/' "$STACK_CONFIG"
+                fi
+                ;;
+            php)
+                systemctl stop "php${php_ver}-fpm" 2>/dev/null || true
+                apt-get "$apt_action" -y -qq "php${php_ver}*" 2>/dev/null
+                result_text="${result_text}  PHP ${php_ver}: removed\n"
+                if [ -f "$STACK_CONFIG" ]; then
+                    sed -i 's/^PHP_VER=.*/PHP_VER=/' "$STACK_CONFIG"
+                fi
+                ;;
+            mysql)
+                systemctl stop mysql 2>/dev/null || true
+                apt-get "$apt_action" -y -qq mysql-server mysql-client mysql-common 2>/dev/null
+                result_text="${result_text}  MySQL: removed\n"
+                if [ -f "$STACK_CONFIG" ]; then
+                    sed -i 's/^HAS_MYSQL=.*/HAS_MYSQL=off/' "$STACK_CONFIG"
+                fi
+                # Remove credentials
+                [ -f "$STACK_CREDS" ] && sed -i '/^MySQL/d' "$STACK_CREDS"
+                ;;
+            mariadb)
+                systemctl stop mariadb 2>/dev/null || true
+                apt-get "$apt_action" -y -qq mariadb-server mariadb-client mariadb-common 2>/dev/null
+                result_text="${result_text}  MariaDB: removed\n"
+                if [ -f "$STACK_CONFIG" ]; then
+                    sed -i 's/^HAS_MARIADB=.*/HAS_MARIADB=off/' "$STACK_CONFIG"
+                fi
+                [ -f "$STACK_CREDS" ] && sed -i '/^MariaDB/d' "$STACK_CREDS"
+                ;;
+            postgresql)
+                systemctl stop postgresql 2>/dev/null || true
+                apt-get "$apt_action" -y -qq postgresql postgresql-contrib 2>/dev/null
+                result_text="${result_text}  PostgreSQL: removed\n"
+                if [ -f "$STACK_CONFIG" ]; then
+                    sed -i 's/^HAS_POSTGRESQL=.*/HAS_POSTGRESQL=off/' "$STACK_CONFIG"
+                fi
+                [ -f "$STACK_CREDS" ] && sed -i '/^PostgreSQL/d' "$STACK_CREDS"
+                ;;
+            mongodb)
+                systemctl stop mongod 2>/dev/null || true
+                apt-get "$apt_action" -y -qq mongodb-org 2>/dev/null
+                result_text="${result_text}  MongoDB: removed\n"
+                if [ -f "$STACK_CONFIG" ]; then
+                    sed -i 's/^HAS_MONGODB=.*/HAS_MONGODB=off/' "$STACK_CONFIG"
+                fi
+                [ -f "$STACK_CREDS" ] && sed -i '/^MongoDB/d' "$STACK_CREDS"
+                ;;
+            phpmyadmin)
+                apt-get "$apt_action" -y -qq phpmyadmin 2>/dev/null
+                local docroot="${DOCROOT:-$SEL_DOCROOT}"
+                rm -f "${docroot}/phpmyadmin" 2>/dev/null
+                result_text="${result_text}  phpMyAdmin: removed\n"
+                if [ -f "$STACK_CONFIG" ]; then
+                    sed -i 's/^HAS_PHPMYADMIN=.*/HAS_PHPMYADMIN=off/' "$STACK_CONFIG"
+                fi
+                ;;
+            adminer)
+                local docroot="${DOCROOT:-$SEL_DOCROOT}"
+                rm -f "${docroot}/adminer.php" 2>/dev/null
+                result_text="${result_text}  Adminer: removed\n"
+                if [ -f "$STACK_CONFIG" ]; then
+                    sed -i 's/^HAS_ADMINER=.*/HAS_ADMINER=off/' "$STACK_CONFIG"
+                fi
+                ;;
+        esac
+    done
+
+    # Clean up orphaned packages
+    apt-get autoremove -y -qq 2>/dev/null || true
+
+    # Reload config vars
+    [ -f "$STACK_CONFIG" ] && load_stack_config 2>/dev/null || true
+
+    "$DIALOG_BIN" --title "Removal Complete" \
+        --msgbox "The following services were removed:\n\n${result_text}\nConfig and credentials updated." 16 55 2>/dev/null
+}
+
 control_panel() {
     local docroot="${DOCROOT:-$SEL_DOCROOT}"
     local port="${PORT:-$SEL_PORT}"
@@ -1281,7 +1454,7 @@ control_panel() {
     while true; do
         local choice
         choice=$(run_dialog --title "Stack Control Panel" \
-            --menu "Select an action:" 25 60 12 \
+            --menu "Select an action:" 26 60 13 \
             "open-site"   "Open Site in Browser" \
             "phpinfo"     "PHP Info Page" \
             "files"       "File Explorer" \
@@ -1292,6 +1465,7 @@ control_panel() {
             "db-user"     "Create DB User" \
             "status"      "Service Status" \
             "restart"     "Restart All Services" \
+            "remove"      "Remove Services" \
             "logs"        "View Logs" \
             "exit"        "Exit Panel") || break
 
@@ -1335,6 +1509,9 @@ control_panel() {
                 ;;
             restart)
                 panel_restart_services
+                ;;
+            remove)
+                remove_services
                 ;;
             logs)
                 show_logs_menu

@@ -26,6 +26,7 @@ Interactive LAMP/LEMP stack setup script with a post-installation control panel.
 | Create DB User | Create a new database user with password and privilege grants |
 | Service Status | Shows running/stopped state of all installed services |
 | Restart Services | Restarts web server, PHP-FPM, and all databases |
+| Remove Services | Selectively uninstall services with optional data purge |
 | View Logs | Pick a service log and view the last 50 lines |
 
 ## Usage
@@ -80,6 +81,7 @@ Navigate with arrow keys and ENTER. The menu loops until you choose **Exit**.
 - **Create DB User** — create a new user on any installed database. Prompts for username, password (auto or manual), and privilege level. For MySQL/MariaDB/PostgreSQL you can grant all privileges, access to a specific database, or no grants. For MongoDB you pick the auth database and role (readWrite, read, dbAdmin, userAdmin, root). New credentials are saved to the store.
 - **Service Status** — shows whether each installed service (web server, PHP-FPM, databases) is running, stopped, or failed.
 - **Restart All Services** — restarts every installed service and reports success/failure for each.
+- **Remove Services** — checklist of all installed services (web server, PHP, databases, phpMyAdmin, Adminer). Select any combination to remove. Asks for confirmation, then whether to purge data or keep it. Stops services, runs `apt-get remove/purge`, cleans up config and credentials, and runs `autoremove`.
 - **View Logs** — sub-menu to pick a service log (Apache/Nginx error/access, PHP-FPM, MySQL, PostgreSQL, MongoDB). Displays the last 50 lines.
 - **Exit** — closes the panel and returns to the terminal.
 
@@ -226,6 +228,24 @@ docker run --rm stack-test
   PASS  create_db_user saves new credential
   PASS  Multiple users per DB in creds file
 
+  remove_services
+  PASS  remove_services handles no services
+  PASS  remove_services stops before purging
+  PASS  remove_services supports purge option
+  PASS  remove_services runs autoremove
+  PASS  remove_services updates config for MySQL
+  PASS  remove_services updates config for MariaDB
+  PASS  remove_services updates config for PostgreSQL
+  PASS  remove_services updates config for MongoDB
+  PASS  remove_services cleans credentials
+  PASS  remove_services has confirmation dialog
+  PASS  remove_services asks about data
+  PASS  remove_services handles phpmyadmin
+  PASS  remove_services handles adminer
+  PASS  Config sed correctly sets HAS_MYSQL=off
+  PASS  Config sed correctly sets HAS_PHPMYADMIN=off
+  PASS  Config preserves HAS_POSTGRESQL=on
+
 [Phase 2] --panel Flag Routing
   PASS  main() checks --panel flag
   PASS  main() calls load_stack_config for --panel
@@ -242,6 +262,7 @@ docker run --rm stack-test
   PASS  Panel has db-user option
   PASS  Panel has status option
   PASS  Panel has restart option
+  PASS  Panel has remove option
   PASS  Panel has logs option
   PASS  Panel has exit option
 
@@ -280,9 +301,9 @@ docker run --rm stack-test
 ========================================
   Test Results
 ========================================
-  Passed: 85
+  Passed: 102
   Failed: 0
-  Total:  85
+  Total:  102
 
   ALL TESTS PASSED
 ```
@@ -292,9 +313,9 @@ docker run --rm stack-test
 | Phase | Area | Tests |
 |-------|------|-------|
 | 0 | Bash syntax (`bash -n`) | 1 |
-| 1 | Config save/load, phpinfo, file explorer, browser open, service status, password generation, credential storage/display, password change, user creation | 49 |
+| 1 | Config save/load, phpinfo, file explorer, browser open, service status, password generation, credential storage/display, password change, user creation, service removal | 65 |
 | 2 | `--panel` flag routing in `main()` | 3 |
-| 3 | All 12 control panel menu items present | 12 |
+| 3 | All 13 control panel menu items present | 13 |
 | 4 | Adminer download + config update | 2 |
 | 5 | Log file paths for all services | 7 |
 | 6 | explorer.php security (no dangerous functions, traversal guard) | 3 |
