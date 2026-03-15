@@ -14,8 +14,14 @@ install_php() {
             add-apt-repository -y ppa:ondrej/php
             pkg_update
 
-            # Find the latest PHP version that has actual installable packages
-            php_ver=$(apt-cache search '^php[0-9]+\.[0-9]+-fpm$' 2>/dev/null | grep -o 'php[0-9]*\.[0-9]*' | sed 's/^php//' | sort -V | tail -1)
+            # Find the latest PHP version that has all core packages available
+            php_ver=""
+            for ver in $(apt-cache search '^php[0-9]+\.[0-9]+-fpm$' 2>/dev/null | grep -o 'php[0-9]*\.[0-9]*' | sed 's/^php//' | sort -rV); do
+                if apt-cache show "php${ver}-common" >/dev/null 2>&1 && apt-cache show "php${ver}-opcache" >/dev/null 2>&1; then
+                    php_ver="$ver"
+                    break
+                fi
+            done
             [ -z "$php_ver" ] && php_ver="8.4"
             log_info "Installing PHP $php_ver..."
 
