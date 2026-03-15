@@ -32,7 +32,6 @@ trap cleanup EXIT
 
 # Detect OS and set all platform variables
 detect_os
-_ensure_services_allowed
 
 # ── Selection variables ──────────────────────────────────────────────────────
 
@@ -129,7 +128,10 @@ main() {
     # 6. Configure firewall
     configure_firewall
 
-    # 7. Restart all services
+    # 7. Allow services to start (Docker containers block this by default)
+    _ensure_services_allowed
+
+    # 8. Restart all services
     restart_services
 
     # 8. Final summary
