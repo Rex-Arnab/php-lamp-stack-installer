@@ -185,37 +185,69 @@ pkg_is_installed() {
 
 # ── Service manager abstraction ──────────────────────────────────────────────
 
+_systemctl_available() {
+    [ "$SVC_MGR" = "systemctl" ] && pidof systemd >/dev/null 2>&1
+}
+
 svc_start() {
     case "$SVC_MGR" in
-        systemctl) systemctl start "$1" ;;
-        brew)      brew services start "$1" ;;
+        systemctl)
+            if _systemctl_available; then
+                systemctl start "$1"
+            else
+                service "$1" start 2>/dev/null || log_warn "Could not start $1 (no systemd). Try manually."
+            fi
+            ;;
+        brew) brew services start "$1" ;;
     esac
 }
 
 svc_stop() {
     case "$SVC_MGR" in
-        systemctl) systemctl stop "$1" 2>/dev/null || true ;;
-        brew)      brew services stop "$1" 2>/dev/null || true ;;
+        systemctl)
+            if _systemctl_available; then
+                systemctl stop "$1" 2>/dev/null || true
+            else
+                service "$1" stop 2>/dev/null || true
+            fi
+            ;;
+        brew) brew services stop "$1" 2>/dev/null || true ;;
     esac
 }
 
 svc_restart() {
     case "$SVC_MGR" in
-        systemctl) systemctl restart "$1" ;;
-        brew)      brew services restart "$1" ;;
+        systemctl)
+            if _systemctl_available; then
+                systemctl restart "$1"
+            else
+                service "$1" restart 2>/dev/null || log_warn "Could not restart $1 (no systemd). Try manually."
+            fi
+            ;;
+        brew) brew services restart "$1" ;;
     esac
 }
 
 svc_enable() {
     case "$SVC_MGR" in
-        systemctl) systemctl enable "$1" ;;
-        brew)      ;;
+        systemctl)
+            if _systemctl_available; then
+                systemctl enable "$1"
+            fi
+            ;;
+        brew) ;;
     esac
 }
 
 svc_status() {
     case "$SVC_MGR" in
-        systemctl) systemctl is-active "$1" 2>/dev/null || echo "not-found" ;;
+        systemctl)
+            if _systemctl_available; then
+                systemctl is-active "$1" 2>/dev/null || echo "not-found"
+            else
+                service "$1" status >/dev/null 2>&1 && echo "active" || echo "inactive"
+            fi
+            ;;
         brew)
             if brew services list 2>/dev/null | grep -q "^$1.*started"; then
                 echo "active"
@@ -228,8 +260,12 @@ svc_status() {
 
 svc_daemon_reload() {
     case "$SVC_MGR" in
-        systemctl) systemctl daemon-reload ;;
-        brew)      ;;
+        systemctl)
+            if _systemctl_available; then
+                systemctl daemon-reload
+            fi
+            ;;
+        brew) ;;
     esac
 }
 

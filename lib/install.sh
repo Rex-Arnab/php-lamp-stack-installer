@@ -539,10 +539,13 @@ configure_firewall() {
             if ! command -v ufw >/dev/null 2>&1; then
                 pkg_install ufw
             fi
-            ufw --force enable
-            ufw allow 22/tcp
-            ufw allow "${SEL_PORT}/tcp"
-            log_success "UFW enabled: SSH (22) and port ${SEL_PORT} allowed."
+            if ufw --force enable 2>/dev/null; then
+                ufw allow 22/tcp
+                ufw allow "${SEL_PORT}/tcp"
+                log_success "UFW enabled: SSH (22) and port ${SEL_PORT} allowed."
+            else
+                log_warn "UFW not available (container/VM?). Skipping firewall."
+            fi
             ;;
         fedora)
             log_info "Configuring firewalld..."
