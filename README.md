@@ -32,14 +32,16 @@ Interactive LAMP/LEMP stack setup script with a post-installation control panel.
 
 ### Fresh Server Setup
 
-1. **Copy the script** to your Ubuntu/Debian server:
+1. **Clone the repo** on your Ubuntu/Debian server:
    ```bash
-   scp setup-stack.sh user@your-server:/tmp/
+   git clone https://github.com/Rex-Arnab/php-lamp-stack-installer.git
+   cd php-lamp-stack-installer
    ```
 
-2. **Run the installer** as root:
+2. **Make it executable and run**:
    ```bash
-   sudo bash /tmp/setup-stack.sh
+   chmod +x setup-stack.sh
+   sudo ./setup-stack.sh
    ```
 
 3. **Walk through the menus** — the script will present dialog screens in order:
@@ -61,7 +63,7 @@ Interactive LAMP/LEMP stack setup script with a post-installation control panel.
 After installation, the control panel launches automatically. To access it later:
 
 ```bash
-sudo bash setup-stack.sh --panel
+sudo ./setup-stack.sh --panel
 ```
 
 Navigate with arrow keys and ENTER. The menu loops until you choose **Exit**.
@@ -85,20 +87,28 @@ Navigate with arrow keys and ENTER. The menu loops until you choose **Exit**.
 
 ```bash
 # Set up a LEMP stack with PostgreSQL on port 8080
-sudo bash setup-stack.sh
+sudo ./setup-stack.sh
 # → pick nginx, check postgresql, set port to 8080 in the menus
 
 # Later, check if services are running
-sudo bash setup-stack.sh --panel
+sudo ./setup-stack.sh --panel
 # → select "Service Status"
 
 # View Nginx error logs after a 500 error
-sudo bash setup-stack.sh --panel
+sudo ./setup-stack.sh --panel
 # → select "View Logs" → "Nginx Error Log"
 
 # Add Adminer to manage your database
-sudo bash setup-stack.sh --panel
+sudo ./setup-stack.sh --panel
 # → select "Adminer" (auto-downloads if not present)
+
+# Forgot your MySQL password? Reset it
+sudo ./setup-stack.sh --panel
+# → select "Change DB Password" → pick MySQL → auto-generate
+
+# Create a new user for your app's database
+sudo ./setup-stack.sh --panel
+# → select "Create DB User" → pick database → set username/password/grants
 ```
 
 ## Config
