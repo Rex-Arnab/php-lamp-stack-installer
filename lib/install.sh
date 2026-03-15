@@ -316,14 +316,23 @@ NGINX
 install_mysql() {
     log_info "Installing MySQL Server..."
 
+    local mysql_svc="mysql"
+    [ "$DISTRO" = "fedora" ] && mysql_svc="mysqld"
+
     case "$DISTRO" in
-        debian) pkg_install mysql-server ;;
+        debian)
+            # MySQL post-install may fail in containers (can't stop mysqld).
+            # Install with || true, then fix pending dpkg if needed.
+            pkg_install mysql-server || {
+                log_warn "MySQL post-install had errors (common in containers). Fixing..."
+                # Kill any leftover mysqld from failed post-install
+                killall mysqld 2>/dev/null; sleep 2
+                dpkg --configure -a 2>/dev/null || true
+            }
+            ;;
         fedora) pkg_install mysql-server ;;
         macos)  pkg_install mysql ;;
     esac
-
-    local mysql_svc="mysql"
-    [ "$DISTRO" = "fedora" ] && mysql_svc="mysqld"
 
     svc_enable "$mysql_svc"
     svc_start "$mysql_svc"
@@ -351,7 +360,13 @@ install_mariadb() {
     log_info "Installing MariaDB Server..."
 
     case "$DISTRO" in
-        debian) pkg_install mariadb-server ;;
+        debian)
+            pkg_install mariadb-server || {
+                log_warn "MariaDB post-install had errors (common in containers). Fixing..."
+                killall mariadbd mysqld 2>/dev/null; sleep 2
+                dpkg --configure -a 2>/dev/null || true
+            }
+            ;;
         fedora) pkg_install mariadb-server ;;
         macos)  pkg_install mariadb ;;
     esac
